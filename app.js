@@ -398,7 +398,6 @@ onAuthStateChanged(auth, async (user) => {
   $("logout").hidden           = !connecte;
   $("supprimer-compte").hidden = !connecte;
   $("ouvrir-connexion").hidden = connecte;
-  $("ouvrir-login").hidden    = connecte;
   $("liste-invite").hidden     = connecte;
   $("liste-contenu").hidden    = !connecte;
 
@@ -448,9 +447,6 @@ function fermerConnexion() {
 }
 
 $("ouvrir-connexion").addEventListener("click", () => ouvrirConnexion(null, "signup"));
-$("ouvrir-login").addEventListener("click", () => ouvrirConnexion(null, "login"));
-document.querySelectorAll(".deja-compte").forEach((b) =>
-  b.addEventListener("click", () => ouvrirConnexion(null, "login")));
 $("invite-connexion").addEventListener("click", () => ouvrirConnexion(null, "signup"));
 $("auth-fermer").addEventListener("click", fermerConnexion);
 
@@ -2029,6 +2025,9 @@ $("serie-valider").addEventListener("click", async () => {
     } else {
       await setDoc(ref, donnees);
       toast(`${titre} est dans ta liste.`);
+      // Tableau de bord : un ajout à la main compte aussi comme un ajout à la liste
+      window.suivi?.contenu("ajout", donnees.id, titre);
+      window.suivi?.action("ajout-liste");
     }
     fermerSerie();
   } catch (err) {
@@ -2342,6 +2341,7 @@ function ouvrirImport() {
 
 function fermerImport() {
   if (importOccupe) return;   // une écriture en cours ne se referme pas à moitié
+  window.suivi?.action("import-liste"); // tableau de bord : une importation de liste
   $("import-screen").hidden = true;
 }
 
