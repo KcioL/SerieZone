@@ -48,7 +48,7 @@
  * Contenus : window.suivi.contenu('serie', '12345', 'One Piece') compte une consultation de ce contenu
  * (une fois par visite) ; window.suivi.recherche('one piece') compte une recherche.
  *
- * Pas compté : localhost, hors connexion, et un appareil où l'on a ouvert le site avec ?suivi=off
+ * Pas compté : localhost, hors connexion, les robots (Google, Apple, Bing…), et un appareil où l'on a ouvert le site avec ?suivi=off
  * (?suivi=on pour annuler).
  */
 (() => {
@@ -106,7 +106,11 @@
     return nettoyer(premier) || 'accueil';
   }
 
-  const horsJeu = () => location.protocol === 'file:' || ['localhost', '127.0.0.1', ''].includes(location.hostname) || !navigator.onLine;
+  // Robots (moteurs de recherche, aperçus de liens, outils d'analyse) : ils exécutent la page comme un
+  // navigateur, mais ce ne sont pas des visiteurs. Ils se signalent dans leur nom ou par navigator.webdriver.
+  const ROBOTS = /bot\/|crawl|spider|slurp|googlebot|google-inspectiontool|googleother|adsbot|mediapartners|applebot|bingbot|bingpreview|yandex|baidu|duckduck|petalbot|semrush|ahrefs|mj12bot|dotbot|bytespider|gptbot|chatgpt-user|oai-searchbot|claudebot|claude-user|perplexity|amazonbot|facebookexternalhit|meta-externalagent|twitterbot|linkedinbot|discordbot|telegrambot|slackbot|pinterestbot|headlesschrome|lighthouse|pagespeed|gtmetrix|pingdom|uptimerobot|statuscake|prerender|phantomjs|puppeteer|playwright/i;
+  const robot = () => navigator.webdriver === true || ROBOTS.test(navigator.userAgent || '');
+  const horsJeu = () => location.protocol === 'file:' || ['localhost', '127.0.0.1', ''].includes(location.hostname) || !navigator.onLine || robot();
   const requete = (chemin, methode, corps) => fetch(`${BASE}/${chemin}.json`, {
     method: methode, body: corps === undefined ? undefined : JSON.stringify(corps), keepalive: true,
   }).catch(() => {});
