@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>SérieZone</title>
+
+  <link rel="icon" type="image/png" sizes="32x32" href="Onglet-32.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="icone-512.png">
+  <link rel="apple-touch-icon" href="Onglet.png">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#141416">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SérieZone">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <div class="fond" aria-hidden="true">
+    <span class="halo-piste"><span class="halo"></span></span>
+  </div>
+
+  <!-- ══ Connexion ══ -->
+  <div id="auth-screen" class="auth-screen" hidden role="dialog" aria-modal="true" aria-label="Connexion">
+    <div class="auth-layout">
+      <div class="auth-box">
+        <button type="button" id="auth-fermer" class="auth-fermer" aria-label="Fermer">×</button>
+        <p class="auth-titre" id="auth-titre">Se connecter</p>
+        <p class="auth-intro">
+          Un compte sert uniquement à garder ta liste et tes notes. Tout le reste
+          du site est consultable sans rien créer.
+        </p>
+        <div id="login-view">
+          <form id="auth-form" class="auth-form" novalidate>
+            <div class="field">
+              <label for="email">Adresse e-mail</label>
+              <input type="email" id="email" autocomplete="email" required>
+            </div>
+
+            <div class="field" id="pseudo-field" hidden>
+              <label for="pseudo">Pseudo</label>
+              <input type="text" id="pseudo" autocomplete="username" minlength="3" maxlength="20">
+              <p class="field-hint">3 à 20 caractères : lettres, chiffres, tiret et tiret bas.</p>
+            </div>
+
+            <div class="field">
+              <label for="password">Mot de passe</label>
+              <input type="password" id="password" autocomplete="current-password" minlength="6" required>
+            </div>
+
+            <div class="field" id="avatar-field" hidden>
+              <label id="avatar-label">Ton avatar</label>
+              <div id="avatar-choix" class="avatar-choix" role="group" aria-labelledby="avatar-label"></div>
+              <p class="field-hint">Facultatif. Clique à nouveau dessus pour l'enlever.</p>
+            </div>
+
+            <p id="auth-error" class="form-error" role="alert" hidden></p>
+            <button type="submit" id="auth-submit" class="btn-primary">Se connecter</button>
+          </form>
+
+          <p class="auth-forgot" id="auth-forgot-wrap">
+            <button type="button" id="auth-forgot" class="btn-link">Mot de passe oublié ?</button>
+          </p>
+
+          <p class="auth-switch">
+            <span id="auth-switch-text">Pas encore de compte ?</span>
+            <button type="button" id="auth-toggle" class="btn-link">Créer un compte</button>
+          </p>
+
+        </div>
+
+        <div id="reset-view" hidden>
+          <p class="auth-intro">Indique l'adresse de ton compte. Tu recevras un lien pour choisir un nouveau mot de passe.</p>
+          <form id="reset-form" class="auth-form" novalidate>
+            <div class="field">
+              <label for="reset-email">Adresse e-mail du compte</label>
+              <input type="email" id="reset-email" autocomplete="off" required>
+            </div>
+            <p id="reset-error" class="form-error" role="alert" hidden></p>
+            <button type="submit" id="reset-submit" class="btn-primary">Envoyer le lien</button>
+          </form>
+          <p class="auth-forgot">
+            <button type="button" id="reset-back" class="btn-link">Retour à la connexion</button>
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Import d'une liste existante ══ -->
+  <div id="import-screen" class="import-screen" hidden role="dialog" aria-modal="true" aria-label="Importer une liste">
+    <div class="import-box">
+      <button type="button" id="import-fermer" class="auth-fermer" aria-label="Fermer">×</button>
+      <p class="auth-titre">Importer ta liste</p>
+
+      <!-- ── Étape 1 : la personne colle son texte ── -->
+      <div id="import-saisie">
+        <p class="auth-intro">
+          Colle ta liste ici, une série par ligne. Les notes sont reconnues sous
+          toutes leurs formes — « Dark 9 », « Dark 18/20 », « Dark : 4/5 » — et
+          tes commentaires entre parenthèses sont ignorés, où qu'ils se trouvent
+          sur la ligne.
+        </p>
+
+        <label for="import-texte" class="visually-hidden">Ta liste</label>
+        <textarea id="import-texte" class="import-texte" rows="9" spellcheck="false"
+          placeholder="-game of thrones 18/20&#10;-breaking bad (à revoir un jour) 20/20&#10;-the office 17/20 (saison 8 bof)&#10;-severance"></textarea>
+
+        <div class="import-options">
+          <div class="field">
+            <label for="import-echelle">Tes notes sont sur</label>
+            <select id="import-echelle">
+              <option value="10">10</option>
+              <option value="5">5</option>
+              <option value="20">20</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="import-statut">Ces séries sont</label>
+            <select id="import-statut">
+              <option value="termine">Déjà vues en entier</option>
+              <option value="en_cours">En cours</option>
+              <option value="a_voir">À voir</option>
+            </select>
+          </div>
+        </div>
+
+        <label class="import-case">
+          <input type="checkbox" id="import-reordonner">
+          <span>
+            Reprendre l'ordre de ce fichier
+            <span class="field-hint">
+              Les séries déjà présentes sont replacées dans l'ordre des lignes
+              collées. Leur progression, leurs notes corrigées et leurs images
+              ne sont pas touchées.
+            </span>
+          </span>
+        </label>
+
+        <p class="field-hint">
+          Les notes gardent l'échelle choisie ci-dessus : un 17/20 reste un
+          17/20. Ce choix ne sert qu'aux lignes où tu n'as écrit qu'un nombre,
+          sans dénominateur. Rien n'est enregistré avant que tu aies vérifié ce
+          qui a été reconnu.
+        </p>
+        <button type="button" id="import-analyser" class="btn-primary">Chercher ces séries</button>
+      </div>
+
+      <!-- ── Étape 2 : recherche sur TMDB ── -->
+      <div id="import-analyse" hidden>
+        <p class="auth-intro" id="import-etat">Recherche des séries sur TMDB…</p>
+        <div class="progress"><span id="import-barre"></span></div>
+        <p class="fiche-progression" id="import-compteur"></p>
+      </div>
+
+      <!-- ── Étape 3 : vérification avant enregistrement ── -->
+      <div id="import-resultats" hidden>
+        <p class="auth-intro" id="import-bilan"></p>
+        <div class="import-barre-outils">
+          <button type="button" id="import-tout" class="btn-link">Tout décocher</button>
+          <button type="button" id="import-retour" class="btn-link">Modifier ma liste</button>
+        </div>
+        <div id="import-lignes" class="import-lignes"></div>
+        <div class="import-pied">
+          <button type="button" id="import-annuler" class="btn-link">Annuler</button>
+          <button type="button" id="import-valider" class="btn-primary">Ajouter à ma liste</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Ajout ou modification d'une série ══ -->
+  <div id="serie-screen" class="import-screen" hidden role="dialog" aria-modal="true" aria-label="Ajouter une série">
+    <div class="import-box serie-box">
+      <button type="button" id="serie-fermer" class="auth-fermer" aria-label="Fermer">×</button>
+      <p class="auth-titre" id="serie-titre-fenetre">Ajouter une série</p>
+
+      <div class="serie-corps">
+        <div class="serie-image">
+          <img id="serie-apercu" class="serie-apercu" alt="" hidden>
+          <span id="serie-sans-image" class="serie-sans-image">Aucune image</span>
+          <label for="serie-fichier" class="btn-ghost serie-parcourir">Choisir une image</label>
+          <input type="file" id="serie-fichier" accept="image/*" class="visually-hidden">
+          <button type="button" id="serie-retirer-image" class="btn-link" hidden>Retirer l'image</button>
+        </div>
+
+        <div class="serie-champs">
+          <div class="field">
+            <label for="serie-nom">Titre</label>
+            <input type="text" id="serie-nom" maxlength="300" autocomplete="off">
+          </div>
+
+          <div class="serie-duo">
+            <div class="field">
+              <label for="serie-episodes">Épisodes au total</label>
+              <input type="number" id="serie-episodes" min="0" max="5000" placeholder="0 si inconnu">
+            </div>
+            <div class="field">
+              <label for="serie-vus">Épisodes vus</label>
+              <input type="number" id="serie-vus" min="0" max="5000" value="0">
+            </div>
+          </div>
+
+          <div class="serie-duo">
+            <div class="field">
+              <label for="serie-statut">Statut</label>
+              <select id="serie-statut">
+                <option value="termine">Terminée</option>
+                <option value="en_cours">En cours</option>
+                <option value="a_voir">À voir</option>
+                <option value="abandonne">Abandonnée</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="serie-note">Ta note</label>
+              <div class="serie-note-ligne">
+                <input type="number" id="serie-note" min="1" max="20" placeholder="—">
+                <select id="serie-sur" aria-label="Échelle de la note">
+                  <option value="20">sur 20</option>
+                  <option value="10">sur 10</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <p id="serie-detache" class="field-hint serie-detache" hidden>
+            Cette série vient de TMDB. La modifier la détachera de leur base :
+            elle gardera ta note et ton nombre d'épisodes vus, mais ne recevra
+            plus ni saisons, ni résumé, ni dates de diffusion.
+          </p>
+          <p id="serie-erreur" class="form-error" role="alert" hidden></p>
+        </div>
+      </div>
+
+      <div class="import-pied">
+        <button type="button" id="serie-annuler" class="btn-link">Annuler</button>
+        <button type="button" id="serie-valider" class="btn-primary">Ajouter à ma liste</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Aperçu d'une série hors TMDB ══ -->
+  <div id="apercu-screen" class="import-screen" hidden role="dialog" aria-modal="true" aria-labelledby="apercu-titre">
+    <div class="import-box apercu-box">
+      <button type="button" id="apercu-fermer" class="auth-fermer" aria-label="Fermer">×</button>
+      <p class="auth-titre" id="apercu-titre"></p>
+
+      <div class="apercu-corps">
+        <img id="apercu-image" class="apercu-image" alt="" hidden>
+        <span id="apercu-vide" class="apercu-image apercu-vide" aria-hidden="true"></span>
+
+        <dl class="apercu-infos">
+          <div><dt>Statut</dt><dd id="apercu-statut"></dd></div>
+          <div><dt>Épisodes</dt><dd id="apercu-episodes"></dd></div>
+          <div><dt>Sa note</dt><dd id="apercu-note"></dd></div>
+        </dl>
+      </div>
+
+      <p class="field-hint apercu-mention">
+        Cette série a été ajoutée à la main par ce membre : elle ne figure pas
+        dans la base de TMDB, il n'y a donc ni résumé ni fiche détaillée.
+      </p>
+
+      <div class="import-pied">
+        <button type="button" id="apercu-ok" class="btn-primary">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Suppression du compte ══ -->
+  <div id="supprimer-screen" class="import-screen" hidden role="dialog" aria-modal="true" aria-labelledby="supprimer-titre">
+    <div class="import-box supprimer-box">
+      <button type="button" id="supprimer-fermer" class="auth-fermer" aria-label="Fermer">×</button>
+      <p class="auth-titre" id="supprimer-titre">Supprimer ton compte</p>
+
+      <div class="supprimer-corps">
+        <p class="auth-intro">
+          Cette action est définitive et rien ne permet de revenir en arrière.
+          Seront effacés sans possibilité de récupération :
+        </p>
+        <p class="supprimer-detail" id="supprimer-detail"></p>
+        <p class="auth-intro">
+          Ton pseudo redeviendra disponible pour quelqu'un d'autre. Si tu veux
+          seulement faire une pause, déconnecte-toi : ta liste t'attendra.
+        </p>
+
+        <div class="field">
+          <label for="supprimer-mot">Écris SUPPRIMER pour confirmer</label>
+          <input type="text" id="supprimer-mot" autocomplete="off" autocapitalize="characters" spellcheck="false">
+        </div>
+
+        <div class="field">
+          <label for="supprimer-mdp">Ton mot de passe</label>
+          <input type="password" id="supprimer-mdp" autocomplete="current-password">
+          <p class="field-hint">Demandé pour vérifier que c'est bien toi.</p>
+        </div>
+
+        <p id="supprimer-erreur" class="form-error" role="alert" hidden></p>
+      </div>
+
+      <div class="import-pied">
+        <button type="button" id="supprimer-annuler" class="btn-link">Annuler</button>
+        <button type="button" id="supprimer-valider" class="btn-danger">Supprimer définitivement</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Application ══ -->
+  <div id="app-screen" hidden>
+    <header class="topbar">
+      <h1 class="wordmark">Série<span>Zone</span></h1>
+
+      <nav class="tabs" aria-label="Sections">
+        <button type="button" class="tab is-active" data-vue="avenir" aria-current="page">
+          <svg class="tab-icone" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="16" rx="2"/>
+            <path d="M3 10 H21 M8 3 V7 M16 3 V7"/>
+          </svg>
+          <span>À venir</span>
+        </button>
+        <button type="button" class="tab" data-vue="decouvrir">
+          <svg class="tab-icone" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M15.5 8.5 L10.5 10.5 L8.5 15.5 L13.5 13.5 Z"/>
+          </svg>
+          <span>Découvrir</span>
+        </button>
+        <button type="button" class="tab" data-vue="succes">
+          <svg class="tab-icone" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 4h8v5a4 4 0 0 1-8 0z"/>
+            <path d="M8 5H5.5a2.5 2.5 0 0 0 2.5 5M16 5h2.5a2.5 2.5 0 0 1-2.5 5"/>
+            <path d="M12 13v4M9 20h6M10 17h4"/>
+          </svg>
+          <span>Succès</span>
+        </button>
+        <button type="button" class="tab" data-vue="profils">
+          <svg class="tab-icone" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="9" cy="8" r="3.4"/>
+            <path d="M3.5 20c0-3.3 2.5-5.4 5.5-5.4s5.5 2.1 5.5 5.4"/>
+            <path d="M16.5 6.2a3.4 3.4 0 0 1 0 6.4M17 14.9c2.2.5 3.5 2.4 3.5 5.1"/>
+          </svg>
+          <span>Profils</span>
+        </button>
+        <button type="button" class="tab" data-vue="liste">
+          <svg class="tab-icone" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="14" rx="2"/>
+            <path d="M10 9 L15 11.5 L10 14 Z"/><path d="M8 21 H16"/>
+          </svg>
+          <span>Ma liste</span>
+        </button>
+      </nav>
+
+      <div class="topbar-right">
+        <img id="user-avatar" class="user-avatar" alt="" hidden>
+        <span id="user-email" class="user-email" hidden></span>
+        <button type="button" id="logout" class="btn-link" hidden>Se déconnecter</button>
+        <button type="button" id="supprimer-compte" class="btn-compte-danger" hidden>Supprimer mon compte</button>
+        <button type="button" id="ouvrir-connexion" class="btn-primary btn-compact" hidden>
+          Créer un compte
+        </button>
+      </div>
+    </header>
+
+    <main class="wrap">
+
+      <!-- ── À venir ── -->
+      <section id="view-avenir">
+        <div id="bloc-mes-prochains" class="bloc-avenir" hidden>
+          <h2 class="section-title">Tes prochains épisodes</h2>
+          <p class="section-note">Les séries de ta liste qui ont un épisode annoncé, du plus proche au plus lointain.</p>
+          <div id="mes-prochains" class="grille"></div>
+        </div>
+
+        <div class="bloc-avenir">
+          <h2 class="section-title">Cette semaine</h2>
+          <p class="section-note">Les séries qui diffusent un nouvel épisode dans les sept prochains jours.</p>
+          <div id="semaine-liste" class="grille"></div>
+        </div>
+
+        <div class="bloc-avenir">
+          <h2 class="section-title">Les nouvelles séries attendues</h2>
+          <p class="section-note">
+            Des séries qui n'ont pas encore commencé, classées par popularité
+            sur TMDB — la mesure de l'attente.
+          </p>
+          <div id="avenir-liste" class="grille"></div>
+        </div>
+      </section>
+
+      <!-- ── Découvrir ── -->
+      <section id="view-decouvrir" hidden>
+        <form id="search-form" class="search-form" role="search">
+          <label for="search-input" class="visually-hidden">Chercher une série</label>
+          <input type="search" id="search-input" placeholder="Chercher une série…" autocomplete="off">
+        </form>
+        <div id="search-results" class="search-results" hidden></div>
+
+        <h2 class="section-title">Par catégorie</h2>
+        <div id="categories" class="categories" role="group" aria-label="Catégories"></div>
+        <div id="bloc-plateformes" class="bloc-plateformes" hidden>
+          <p class="categories-titre">Par plateforme</p>
+          <div id="plateformes-categories" class="categories" role="group" aria-label="Plateformes"></div>
+        </div>
+        <p class="section-note" id="categorie-note"></p>
+        <div id="categorie-liste" class="grille"></div>
+      </section>
+
+      <!-- ── Ma liste ── -->
+      <section id="view-liste" hidden>
+        <div id="liste-invite" class="invite" hidden>
+          <h2 class="section-title">Garde une trace de ce que tu regardes</h2>
+          <p class="section-note">
+            Avec un compte, tu peux suivre où tu en es saison par saison, voir
+            arriver les nouveaux épisodes, noter les séries et retrouver ta liste
+            sur tous tes appareils. C'est gratuit
+            et ça prend dix secondes.
+          </p>
+          <button type="button" id="invite-connexion" class="btn-primary">Créer mon compte</button>
+        </div>
+
+        <div id="liste-contenu">
+        <div class="liste-outils">
+          <button type="button" id="ouvrir-serie" class="btn-ghost">Ajouter une série</button>
+          <button type="button" id="ouvrir-import" class="btn-ghost">Importer une liste</button>
+        </div>
+
+        <div id="stats" class="stats" hidden>
+          <p><strong id="stat-suivis">0</strong> séries suivies</p>
+          <p><strong id="stat-episodes">0</strong> épisodes vus</p>
+          <p><strong id="stat-termines">0</strong> terminées</p>
+        </div>
+
+        <form class="search-form search-liste" role="search" onsubmit="return false">
+          <label for="liste-recherche" class="visually-hidden">Chercher dans ma liste</label>
+          <input type="search" id="liste-recherche" placeholder="Chercher dans ma liste…" autocomplete="off">
+        </form>
+
+        <div class="barre-filtres">
+          <div class="filtres" role="group" aria-label="Filtrer ma liste">
+            <button type="button" class="filtre is-active" data-statut="tous">Tous</button>
+            <button type="button" class="filtre" data-statut="en_cours">En cours</button>
+            <button type="button" class="filtre" data-statut="a_voir">À voir</button>
+            <button type="button" class="filtre" data-statut="termine">Terminées</button>
+            <button type="button" class="filtre" data-statut="abandonne">Abandonnées</button>
+          </div>
+          <div id="tri-liste" class="tri" data-libelle="Trier ma liste"></div>
+        </div>
+
+        <div id="liste" class="grille"></div>
+        <p id="liste-vide" class="empty-state" hidden>
+          Rien ici pour l'instant. Passe par À venir ou Découvrir pour ajouter une série.
+        </p>
+        <p id="loading" class="loading" hidden>Chargement…</p>
+        </div>
+      </section>
+
+      <!-- ── Succès ── -->
+      <section id="view-succes" hidden>
+        <div id="succes-invite" class="invite" hidden>
+          <h2 class="section-title">Tes succès</h2>
+          <p class="section-note">
+            Séries terminées, saisons bouclées, épisodes vus, genres explorés :
+            tout se déduit de ta liste. Il faut un compte pour en avoir une.
+          </p>
+          <button type="button" id="succes-connexion" class="btn-primary">Créer mon compte</button>
+        </div>
+
+        <div id="succes-contenu" hidden>
+          <h2 class="section-title">Tes succès</h2>
+          <p class="section-note" id="succes-bilan"></p>
+
+          <div id="succes-liste"></div>
+        </div>
+      </section>
+
+      <!-- ── Profils ── -->
+      <section id="view-profils" hidden>
+        <div id="profils-invite" class="invite" hidden>
+          <h2 class="section-title">Regarde ce que les autres ont vu</h2>
+          <p class="section-note">
+            Les membres qui le souhaitent publient leur liste et leurs notes.
+            Il faut un compte pour y accéder — et pour publier la tienne.
+          </p>
+          <button type="button" id="profils-connexion" class="btn-primary">Créer mon compte</button>
+        </div>
+
+        <div id="profils-contenu" hidden>
+          <div class="publication">
+            <div class="publication-texte">
+              <p class="publication-titre">Mon profil public</p>
+              <p class="section-note" id="publication-etat"></p>
+            </div>
+            <button type="button" id="publier" class="btn-ghost">Publier mon profil</button>
+          </div>
+
+          <h2 class="section-title">Profils publics</h2>
+          <p class="section-note" id="profils-note"></p>
+          <div id="profils-liste" class="profils"></div>
+        </div>
+      </section>
+
+      <!-- ── Profil d'un membre ── -->
+      <section id="view-profil" hidden>
+        <button type="button" id="profil-retour" class="btn-link back-link">Retour</button>
+
+        <div class="profil-tete">
+          <img id="profil-avatar" class="profil-avatar" alt="" hidden>
+          <div>
+            <h2 class="section-title" id="profil-pseudo"></h2>
+            <div class="stats" id="profil-stats"></div>
+          </div>
+        </div>
+
+        <div class="barre-filtres">
+          <div class="filtres" role="group" aria-label="Filtrer">
+            <button type="button" class="filtre-profil is-active" data-statut="tous">Tous</button>
+            <button type="button" class="filtre-profil" data-statut="en_cours">En cours</button>
+            <button type="button" class="filtre-profil" data-statut="termine">Terminées</button>
+          </div>
+          <div id="tri-profil" class="tri" data-libelle="Trier cette liste"></div>
+        </div>
+
+        <div id="profil-liste" class="grille"></div>
+        <p id="profil-vide" class="empty-state" hidden>Cette liste est vide.</p>
+      </section>
+
+      <!-- ── Fiche ── -->
+      <section id="view-fiche" hidden>
+        <button type="button" id="fiche-retour" class="btn-link back-link">Retour</button>
+
+        <div class="fiche-tete">
+          <img id="fiche-cover" class="fiche-cover" alt="" referrerpolicy="no-referrer">
+          <span id="fiche-cover-vide" class="fiche-cover fiche-cover-vide" aria-hidden="true" hidden></span>
+          <div class="fiche-meta">
+            <h2 class="fiche-titre" id="fiche-titre"></h2>
+
+            <button type="button" id="fiche-modifier" class="btn-modifier" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 5l4 4"/>
+              </svg>
+              Modifier le titre et l'image
+            </button>
+
+            <p class="fiche-sous" id="fiche-sous"></p>
+            <p class="fiche-credits" id="fiche-credits" hidden></p>
+            <div id="fiche-genres" class="etiquettes"></div>
+            <p class="fiche-diffusion" id="fiche-diffusion"></p>
+
+            <div id="fiche-suivi" hidden>
+              <div class="progress"><span id="fiche-barre"></span></div>
+              <p class="fiche-progression" id="fiche-progression"></p>
+
+              <div class="episode-actions">
+                <button type="button" id="ep-moins" class="btn-rond" aria-label="Retirer un épisode">−</button>
+                <button type="button" id="ep-plus" class="btn-primary">J'ai vu l'épisode suivant</button>
+                <button type="button" id="ep-choisir" class="btn-link">Choisir où j'en suis</button>
+              </div>
+
+              <div id="ep-saisie" class="ep-saisie" hidden>
+                <div class="field" id="ep-saison-champ">
+                  <label for="ep-saison">Saison</label>
+                  <select id="ep-saison"></select>
+                </div>
+                <div class="field">
+                  <label for="ep-numero" id="ep-numero-libelle">Dernier épisode vu</label>
+                  <input type="number" id="ep-numero" min="0" inputmode="numeric">
+                </div>
+                <button type="button" id="ep-valider" class="btn-ghost">Valider</button>
+              </div>
+
+              <div class="statuts" role="group" aria-label="Statut">
+                <button type="button" class="statut" data-statut="a_voir">À voir</button>
+                <button type="button" class="statut" data-statut="en_cours">En cours</button>
+                <button type="button" class="statut" data-statut="termine">Terminée</button>
+                <button type="button" class="statut" data-statut="abandonne">Abandonnée</button>
+              </div>
+            </div>
+
+            <button type="button" id="fiche-ajouter" class="btn-primary" hidden>Ajouter à ma liste</button>
+          </div>
+        </div>
+
+        <div class="note-bloc" id="fiche-note-bloc" hidden>
+          <div class="note-tete">
+            <p class="note-libelle">Ta note — personnelle, visible de toi seul</p>
+            <div class="note-echelle" role="group" aria-label="Échelle">
+              <button type="button" class="echelle" data-sur="10">sur 10</button>
+              <button type="button" class="echelle" data-sur="20">sur 20</button>
+            </div>
+          </div>
+          <p class="note-ligne" id="fiche-note"></p>
+          <div class="note-choix" id="fiche-notes" role="group" aria-label="Noter cette série"></div>
+        </div>
+
+        <section class="saisons" id="fiche-saisons-bloc" hidden>
+          <h3 class="plateformes-titre">Saisons</h3>
+          <div id="fiche-saisons" class="saisons-liste"></div>
+        </section>
+
+        <section class="plateformes" id="fiche-plateformes" hidden>
+          <h3 class="plateformes-titre">Où la regarder</h3>
+          <div id="fiche-liens" class="plateformes-groupes"></div>
+          <p class="field-hint" id="plateformes-note"></p>
+        </section>
+
+        <p class="fiche-resume" id="fiche-resume"></p>
+
+        <div class="danger" id="fiche-danger" hidden>
+          <button type="button" id="fiche-retirer" class="btn-danger">Retirer de ma liste</button>
+        </div>
+      </section>
+
+      <footer class="credits-tmdb">
+        <p>Données des séries : <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>.
+           Ce site utilise l'API de TMDB, sans être approuvé ni certifié par TMDB.
+           Disponibilités des plateformes : JustWatch.</p>
+      </footer>
+    </main>
+
+    <nav class="barre-basse" aria-label="Navigation principale">
+      <span class="barre-curseur" aria-hidden="true"></span>
+
+      <button type="button" class="onglet-bas is-active" data-vue="avenir">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="5" width="18" height="16" rx="2"/>
+          <path d="M3 10 H21 M8 3 V7 M16 3 V7"/>
+        </svg>
+        <span>À venir</span>
+      </button>
+
+      <button type="button" class="onglet-bas" data-vue="decouvrir">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="9"/>
+          <path d="M15.5 8.5 L10.5 10.5 L8.5 15.5 L13.5 13.5 Z"/>
+        </svg>
+        <span>Découvrir</span>
+      </button>
+
+      <button type="button" class="onglet-bas" data-vue="succes">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M8 4h8v5a4 4 0 0 1-8 0z"/>
+          <path d="M8 5H5.5a2.5 2.5 0 0 0 2.5 5M16 5h2.5a2.5 2.5 0 0 1-2.5 5"/>
+          <path d="M12 13v4M9 20h6M10 17h4"/>
+        </svg>
+        <span>Succès</span>
+      </button>
+
+      <button type="button" class="onglet-bas" data-vue="profils">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="8" r="3.4"/>
+          <path d="M3.5 20c0-3.3 2.5-5.4 5.5-5.4s5.5 2.1 5.5 5.4"/>
+          <path d="M16.5 6.2a3.4 3.4 0 0 1 0 6.4M17 14.9c2.2.5 3.5 2.4 3.5 5.1"/>
+        </svg>
+        <span>Profils</span>
+      </button>
+
+      <button type="button" class="onglet-bas" data-vue="liste">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="14" rx="2"/>
+          <path d="M10 9 L15 11.5 L10 14 Z"/><path d="M8 21 H16"/>
+        </svg>
+        <span>Ma liste</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="app.js"></script>
+  <!-- Comptage des visites pour le tableau de bord. Les chiffres vont dans la Realtime Database
+       d'AnimeZone, sous stats/seriezone/ : le tableau de bord voit ainsi les deux sites. -->
+  <script src="suivi.js" data-site="seriezone" data-page="avenir" data-base="https://animezone-8d2f5-default-rtdb.europe-west1.firebasedatabase.app" defer></script>
+</body>
+</html>
