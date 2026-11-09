@@ -1327,3 +1327,10 @@ button, input { font: inherit; color: inherit; }
 .credits-tmdb p { margin: 0; max-width: 70ch; }
 .credits-tmdb a { color: var(--accent); }
 .plateformes-groupes .plateformes-liste { margin-bottom: 4px; }
+
+/* Créer un compte / se connecter, côte à côte */
+.invite-boutons { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+.invite-boutons .btn-ghost { font-size: inherit; font-weight: 500; color: var(--text); padding: 11px 22px; }
+@media (max-width: 560px) {
+  #ouvrir-login, #ouvrir-connexion { padding: 7px 12px; font-size: 0.82rem; }
+}
