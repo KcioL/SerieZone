@@ -23,23 +23,31 @@ const $ = (id) => document.getElementById(id);
 let currentUser  = null;
 let unsubscribe  = null;
 let mode         = "login";
-let listeCache   = [];
-let ficheCourante = null;     // série affichée dans la fiche
+let listeCache   = [];        // séries suivies
+let filmsCache   = [];        // films suivis
+let unsubFilms   = null;
+let ficheCourante = null;     // série ou film affiché dans la fiche
 let filtreStatut = "tous";
 let categorieActive = null;
 
-/* Les séries suivies sont rangées dans users/{uid}/series. */
-const COLLECTION = "series";
-const refSerie = (uid, id) => doc(db, "users", uid, COLLECTION, id);
+/* Deux listes par compte : users/{uid}/series et users/{uid}/films.
+   Chaque élément porte en mémoire son « media » (« serie » ou « film ») :
+   un même numéro TMDB peut désigner une série et un film différents. */
+const COLLECTIONS = { serie: "series", film: "films" };
+const refElement = (uid, media, id) => doc(db, "users", uid, COLLECTIONS[media], id);
+const refSerie = (uid, id) => refElement(uid, "serie", id);
+const cacheDe = (media) => (media === "film" ? filmsCache : listeCache);
+const suiviDe = (a) => (a ? cacheDe(a.media).find((s) => s.id === a.id) : null);
+const tousLesSuivis = () => [...listeCache, ...filmsCache];
 
 /* ══════════════════ TMDB ══════════════════
 
-   The Movie Database connaît toutes les séries, avec leurs saisons, leurs
-   épisodes, leurs dates de diffusion et les plateformes françaises.
+   The Movie Database connaît toutes les séries et tous les films, avec leurs
+   saisons, leurs épisodes, leurs dates de sortie et les plateformes françaises.
 
    Le site ne parle jamais directement à TMDB : il passe par le relais
    (dossier relais-tmdb/), qui garde la clé côté serveur. Ici, on n'a que
-   l'adresse du relais, qui ne permet rien d'autre que lire des séries.
+   l'adresse du relais, qui ne permet rien d'autre que lire séries et films.
    ══════════════════════════════════════════ */
 
 const IMG = "https://image.tmdb.org/t/p/";
@@ -79,6 +87,14 @@ const GENRES = {
   9648: "Mystère", 10763: "Actualités", 10764: "Téléréalité",
   10765: "Science-fiction & fantastique", 10766: "Feuilleton",
   10767: "Talk-show", 10768: "Guerre & politique", 37: "Western"
+};
+
+const GENRES_FILMS = {
+  28: "Action", 12: "Aventure", 16: "Animation", 35: "Comédie", 80: "Crime",
+  99: "Documentaire", 18: "Drame", 10751: "Familial", 14: "Fantastique",
+  36: "Histoire", 27: "Horreur", 10402: "Musique", 9648: "Mystère",
+  10749: "Romance", 878: "Science-fiction", 10770: "Téléfilm", 53: "Thriller",
+  10752: "Guerre", 37: "Western"
 };
 
 // Ce qui encombre les listes sans être des séries qu'on « suit » : journaux,
@@ -152,6 +168,7 @@ function lirePlateformes(wp) {
 const normaliser = (m) => {
   const saisons = m.seasons ? lireSaisons(m) : null;
   return {
+    media:     "serie",
     id:        String(m.id),
     title:     m.name || m.original_name || "Sans titre",
     original:  m.original_name || "",
@@ -175,6 +192,35 @@ const normaliser = (m) => {
     complet:   !!saisons
   };
 };
+
+/* Un film : pas de saisons, mais une durée et un réalisateur. */
+const normaliserFilm = (m) => ({
+  media:     "film",
+  id:        String(m.id),
+  title:     m.title || m.original_title || "Sans titre",
+  original:  m.original_title || "",
+  cover:     affiche(m.poster_path),
+  resume:    (m.overview || "").trim(),
+  genres:    (m.genres ? m.genres.map((g) => g.id) : m.genre_ids || [])
+               .map((id) => GENRES_FILMS[id]).filter(Boolean),
+  annee:     (m.release_date || "").slice(0, 4) || null,
+  debut:     m.release_date || "",
+  diffusion: m.release_date && m.release_date > aujourdhui() ? "a_venir" : "",
+  duree:     m.runtime || 0,
+  realisateurs: (m.credits?.crew || []).filter((c) => c.job === "Director").map((c) => c.name),
+  popularite:m.popularity || 0,
+  liens:     lirePlateformes(m["watch/providers"]),
+  complet:   m.runtime !== undefined
+});
+
+const normaliserPour = (media) => (media === "film" ? normaliserFilm : normaliser);
+
+/* « 2 h 06 » se lit mieux que « 126 minutes ». */
+function duree(min) {
+  if (!min) return "";
+  const h = Math.floor(min / 60), m = min % 60;
+  return h ? `${h} h${m ? ` ${String(m).padStart(2, "0")}` : ""}` : `${m} min`;
+}
 
 const aujourdhui = () => new Date().toISOString().slice(0, 10);
 const dansJours = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
@@ -211,6 +257,40 @@ async function nouveautes() {
   return avecAffiche(liste).slice(0, 24).map(normaliser);
 }
 
+/* Les films qui sortent bientôt au cinéma en France. */
+async function filmsBientot() {
+  const liste = await deuxPages("movie/upcoming", { region: "FR" });
+  const demain = dansJours(1);
+  return avecAffiche(liste)
+    .filter((m) => (m.release_date || "") >= demain)
+    .sort((a, b) => (b.popularity || 0) - (a.popularity || 0))
+    .slice(0, 24).map(normaliserFilm);
+}
+
+const CATEGORIES_FILMS = [
+  { nom: "Tendances",       chemin: "trending/movie/week", note: "Les films dont on parle le plus cette semaine." },
+  { nom: "Au cinéma",       chemin: "movie/now_playing", params: { region: "FR" }, note: "Les films à l'affiche en ce moment en France." },
+  { nom: "Les mieux notés", params: { sort_by: "vote_average.desc", "vote_count.gte": 5000 },
+    note: "Les meilleures notes de TMDB, parmi les films notés par au moins 5 000 personnes." },
+  { nom: "Action",          genre: 28 },
+  { nom: "Aventure",        genre: 12 },
+  { nom: "Comédie",         genre: 35 },
+  { nom: "Drame",           genre: 18 },
+  { nom: "Science-fiction", genre: 878 },
+  { nom: "Thriller",        genre: 53 },
+  { nom: "Horreur",         genre: 27 },
+  { nom: "Fantastique",     genre: 14 },
+  { nom: "Animation",       genre: 16 },
+  { nom: "Romance",         genre: 10749 },
+  { nom: "Crime",           genre: 80 },
+  { nom: "Mystère",         genre: 9648 },
+  { nom: "Guerre",          genre: 10752 },
+  { nom: "Histoire",        genre: 36 },
+  { nom: "Documentaires",   genre: 99 },
+  { nom: "Familial",        genre: 10751 },
+  { nom: "Western",         genre: 37 }
+].map((c) => ({ ...c, media: "film" }));
+
 const CATEGORIES = [
   { nom: "Tendances",       chemin: "trending/tv/week", note: "Les séries dont on parle le plus cette semaine." },
   { nom: "Les mieux notées", params: { sort_by: "vote_average.desc", "vote_count.gte": 2500 },
@@ -227,16 +307,20 @@ const CATEGORIES = [
   { nom: "Animation",       genre: 16 },
   { nom: "Familial",        genre: 10751 },
   { nom: "Western",         genre: 37 }
-];
+].map((c) => ({ ...c, media: "serie" }));
+
+const categoriesDe = (media) => (media === "film" ? CATEGORIES_FILMS : CATEGORIES);
 
 async function parCategorie(cat) {
+  const film = cat.media === "film";
+  const norm = normaliserPour(cat.media);
   if (cat.chemin) {
-    const d = await deuxPages(cat.chemin, {});
-    return avecAffiche(d).map(normaliser);
+    const d = await deuxPages(cat.chemin, cat.params || {});
+    return avecAffiche(d).map(norm);
   }
   const params = {
-    sort_by: "popularity.desc", "vote_count.gte": 150,
-    without_genres: SANS_BRUIT, ...cat.params
+    sort_by: "popularity.desc", "vote_count.gte": film ? 300 : 150,
+    ...(film ? {} : { without_genres: SANS_BRUIT }), ...cat.params
   };
   if (cat.genre) params.with_genres = cat.genre;
   if (cat.plateforme) {
@@ -245,42 +329,48 @@ async function parCategorie(cat) {
     params.with_watch_monetization_types = "flatrate|free|ads";
     params["vote_count.gte"] = 50;
   }
-  const d = await deuxPages("discover/tv", params);
-  return avecAffiche(d).map(normaliser);
+  const d = await deuxPages(film ? "discover/movie" : "discover/tv", params);
+  return avecAffiche(d).map(norm);
 }
 
 /* Les plateformes disponibles en France, dans l'ordre où TMDB les met en avant. */
-async function plateformesFR() {
-  const d = await tmdb("watch/providers/tv", { watch_region: "FR" });
+async function plateformesFR(media) {
+  const film = media === "film";
+  const d = await tmdb(film ? "watch/providers/movie" : "watch/providers/tv", { watch_region: "FR" });
   return (d.results || [])
     .filter((p) => p.display_priorities?.FR !== undefined)
     .sort((a, b) => a.display_priorities.FR - b.display_priorities.FR)
     .slice(0, 10)
-    .map((p) => ({ nom: p.provider_name, plateforme: p.provider_id,
-                   note: `Séries disponibles sur ${p.provider_name} en France, par popularité.` }));
+    .map((p) => ({ nom: p.provider_name, plateforme: p.provider_id, media,
+                   note: `${film ? "Films" : "Séries"} disponibles sur ${p.provider_name} en France, par popularité.` }));
 }
 
-async function chercher(terme) {
-  const d = await tmdb("search/tv", { query: terme, include_adult: false });
-  return (d.results || []).map(normaliser);
+async function chercher(terme, media) {
+  const film = media === "film";
+  const d = await tmdb(film ? "search/movie" : "search/tv", { query: terme, include_adult: false });
+  return (d.results || []).map(normaliserPour(media));
 }
 
 /* Rouvrir la même fiche dans la session ne redemande rien : une série ne
    change pas de résumé en dix minutes. */
 const ficheCache = new Map();
 
-async function parIdentifiant(id, { frais = false } = {}) {
-  if (!frais && ficheCache.has(id)) return ficheCache.get(id);
+async function parIdentifiant(media, id, { frais = false } = {}) {
+  const cle = `${media}:${id}`;
+  if (!frais && ficheCache.has(cle)) return ficheCache.get(cle);
 
-  const m = await tmdb(`tv/${id}`, { append_to_response: "watch/providers" });
+  const chemin = media === "film" ? `movie/${id}` : `tv/${id}`;
+  const m = await tmdb(chemin, {
+    append_to_response: media === "film" ? "watch/providers,credits" : "watch/providers"
+  });
 
-  // Beaucoup de séries n'ont pas de résumé en français : on prend l'anglais.
+  // Beaucoup de fiches n'ont pas de résumé en français : on prend l'anglais.
   if (!m.overview) {
-    try { m.overview = (await tmdb(`tv/${id}`, { language: "en-US" })).overview || ""; } catch {}
+    try { m.overview = (await tmdb(chemin, { language: "en-US" })).overview || ""; } catch {}
   }
 
-  const a = normaliser(m);
-  ficheCache.set(id, a);
+  const a = normaliserPour(media)(m);
+  ficheCache.set(cle, a);
   return a;
 }
 
@@ -398,13 +488,16 @@ onAuthStateChanged(auth, async (user) => {
   $("logout").hidden           = !connecte;
   $("supprimer-compte").hidden = !connecte;
   $("ouvrir-connexion").hidden = connecte;
+  $("ouvrir-login").hidden    = connecte;
   $("liste-invite").hidden     = connecte;
   $("liste-contenu").hidden    = !connecte;
 
   if (!connecte) {
     montrerAvatar(null);
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }
+    if (unsubFilms)  { unsubFilms();  unsubFilms = null; }
     listeCache = [];
+    filmsCache = [];
     profilsCharges = false;
     diffusionsFaites = false;
     if (ficheCourante) majFiche();
@@ -447,6 +540,9 @@ function fermerConnexion() {
 }
 
 $("ouvrir-connexion").addEventListener("click", () => ouvrirConnexion(null, "signup"));
+$("ouvrir-login").addEventListener("click", () => ouvrirConnexion(null, "login"));
+document.querySelectorAll(".deja-compte").forEach((b) =>
+  b.addEventListener("click", () => ouvrirConnexion(null, "login")));
 $("invite-connexion").addEventListener("click", () => ouvrirConnexion(null, "signup"));
 $("auth-fermer").addEventListener("click", fermerConnexion);
 
@@ -729,8 +825,9 @@ function showView(nom) {
 
 /* ══════════════════ À venir ══════════════════
 
-   Trois blocs, du plus personnel au plus général : les prochains épisodes de
-   tes séries, ce qui passe cette semaine, puis les nouvelles séries attendues.
+   Du plus personnel au plus général : les prochains épisodes de tes séries,
+   ce qui passe cette semaine, les nouvelles séries attendues, puis les films
+   qui arrivent au cinéma.
    ══════════════════════════════════════════════ */
 
 let avenirCharge = false;
@@ -741,16 +838,17 @@ async function chargerAVenir() {
 
   const blocs = [
     { grille: $("semaine-liste"), source: cetteSemaine, genre: "semaine" },
-    { grille: $("avenir-liste"),  source: nouveautes,   genre: "avenir" }
+    { grille: $("avenir-liste"),  source: nouveautes,   genre: "avenir" },
+    { grille: $("films-avenir-liste"), source: filmsBientot, genre: "avenir" }
   ];
 
   await Promise.all(blocs.map(async ({ grille, source, genre }) => {
     grille.innerHTML = `<p class="loading">Chargement…</p>`;
     try {
-      const series = await source();
+      const elements = await source();
       grille.innerHTML = "";
-      if (!series.length) grille.innerHTML = `<p class="loading">Rien pour le moment.</p>`;
-      series.forEach((a) => grille.appendChild(carte(a, genre)));
+      if (!elements.length) grille.innerHTML = `<p class="loading">Rien pour le moment.</p>`;
+      elements.forEach((a) => grille.appendChild(carte(a, genre)));
     } catch (err) {
       avenirCharge = false;
       console.error("À venir :", err);
@@ -773,24 +871,52 @@ function afficherMesProchains() {
   bloc.hidden = !currentUser || !prochains.length;
   zone.innerHTML = "";
   prochains.slice(0, 18).forEach((s) => {
-    const el = carte({ id: s.id, title: s.title, cover: s.cover, annee: null, genres: s.genres || [] }, "prochain", s);
+    const el = carte({ media: "serie", id: s.id, title: s.title, cover: s.cover, annee: null, genres: s.genres || [] }, "prochain", s);
     zone.appendChild(el);
   });
 }
 
-/* ══════════════════ Découvrir ══════════════════ */
+/* ══════════════════ Découvrir ══════════════════
 
-let plateformesChargees = false;
+   Un sélecteur « Séries / Films » en haut : la recherche, les catégories et
+   les plateformes suivent ce choix. */
+
+let mediaDecouvrir = "serie";
+const plateformesChargees = { serie: null, film: null };
 
 function construireCategories() {
   const zone = $("categories");
   if (zone.children.length) return;
+  remplirCategories();
+}
 
-  CATEGORIES.forEach((cat, i) => zone.appendChild(puceCategorie(cat, i === 0)));
-  categorieActive = CATEGORIES[0];
+function remplirCategories() {
+  const zone = $("categories");
+  zone.innerHTML = "";
+  const liste = categoriesDe(mediaDecouvrir);
+  liste.forEach((cat, i) => zone.appendChild(puceCategorie(cat, i === 0)));
+  categorieActive = liste[0];
   chargerCategorie();
   construirePlateformes();
 }
+
+document.querySelectorAll(".type-decouvrir").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (btn.dataset.media === mediaDecouvrir) return;
+    mediaDecouvrir = btn.dataset.media;
+    document.querySelectorAll(".type-decouvrir").forEach((b) => {
+      const actif = b === btn;
+      b.classList.toggle("is-active", actif);
+      b.setAttribute("aria-pressed", String(actif));
+    });
+    const film = mediaDecouvrir === "film";
+    $("search-input").placeholder = film ? "Chercher un film…" : "Chercher une série…";
+    $("search-label").textContent = film ? "Chercher un film" : "Chercher une série";
+    remplirCategories();
+    const terme = $("search-input").value.trim();
+    if (terme.length >= 2) lancerRecherche(terme);
+  });
+});
 
 function puceCategorie(cat, active = false) {
   const btn = document.createElement("button");
@@ -807,15 +933,16 @@ function puceCategorie(cat, active = false) {
 }
 
 async function construirePlateformes() {
-  if (plateformesChargees) return;
-  plateformesChargees = true;
+  const media = mediaDecouvrir;
+  const zone = $("plateformes-categories");
+  zone.innerHTML = "";
+  $("bloc-plateformes").hidden = true;
   try {
-    const liste = await plateformesFR();
-    const zone = $("plateformes-categories");
-    liste.forEach((cat) => zone.appendChild(puceCategorie(cat)));
-    $("bloc-plateformes").hidden = !liste.length;
+    plateformesChargees[media] ||= await plateformesFR(media);
+    if (media !== mediaDecouvrir) return;
+    plateformesChargees[media].forEach((cat) => zone.appendChild(puceCategorie(cat)));
+    $("bloc-plateformes").hidden = !plateformesChargees[media].length;
   } catch (err) {
-    plateformesChargees = false;
     console.warn("Plateformes :", err.message);
   }
 }
@@ -828,14 +955,14 @@ async function chargerCategorie() {
   grille.innerHTML = `<p class="loading">Chargement…</p>`;
 
   try {
-    const series = await parCategorie(cat);
+    const elements = await parCategorie(cat);
     if (categorieActive !== cat) return;    // un autre choix a pris le relais
     grille.innerHTML = "";
-    if (!series.length) {
+    if (!elements.length) {
       grille.innerHTML = `<p class="loading">Aucun résultat pour cette catégorie.</p>`;
       return;
     }
-    series.forEach((a) => grille.appendChild(carte(a, "populaire")));
+    elements.forEach((a) => grille.appendChild(carte(a, "populaire")));
   } catch (err) {
     if (categorieActive !== cat) return;
     console.error("Catégorie :", err);
@@ -876,21 +1003,23 @@ $("search-form").addEventListener("submit", (e) => {
 
 async function lancerRecherche(terme) {
   const mien = ++jeton;
+  const media = mediaDecouvrir;
   const box = $("search-results");
   box.hidden = false;
 
   try {
-    const series = await chercher(terme);
+    const elements = await chercher(terme, media);
     if (mien !== jeton) return;   // une frappe plus récente a pris le relais
 
     box.innerHTML = `<h2 class="section-title">Résultats</h2>`;
-    if (!series.length) {
-      box.innerHTML += `<p class="section-note">Rien pour « ${escapeHtml(terme)} ».</p>`;
+    if (!elements.length) {
+      const autre = media === "film" ? "Séries" : "Films";
+      box.innerHTML += `<p class="section-note">Rien pour « ${escapeHtml(terme)} ». Essaie aussi dans « ${autre} », en haut de la page.</p>`;
       return;
     }
     const grille = document.createElement("div");
     grille.className = "grille";
-    series.forEach((a) => grille.appendChild(carte(a, "populaire")));
+    elements.forEach((a) => grille.appendChild(carte(a, "populaire")));
     box.appendChild(grille);
   } catch (err) {
     if (mien !== jeton) return;
@@ -902,7 +1031,7 @@ async function lancerRecherche(terme) {
 
 /* ══════════════════ Cartes ══════════════════ */
 
-/* Une série saisie à la main n'a pas toujours d'image. Un <img src=""> fait
+/* Un titre saisi à la main n'a pas toujours d'image. Un <img src=""> fait
    afficher au navigateur son icône d'image cassée : on met un carré aux
    initiales à la place, qui a au moins l'air voulu. */
 const initiales = (titre) => String(titre || "?")
@@ -916,13 +1045,25 @@ const jaquette = (url, titre) => url
 /* Badge en haut de la jaquette : l'état de ta progression, d'un coup d'œil. */
 function badgeSuivi(s) {
   if (!s) return "";
+  if (s.media === "film") {
+    return estTermine(s) ? `<span class="carte-suivi">Vu</span>` : `<span class="carte-suivi est-ajour">À voir</span>`;
+  }
   if (estTermine(s)) return `<span class="carte-suivi">Terminée</span>`;
   if (s.statut === "en_cours" && estAJour(s)) return `<span class="carte-suivi est-ajour">À jour</span>`;
   return `<span class="carte-suivi">Suivie</span>`;
 }
 
+/* Le texte en bas de la jaquette d'un élément de ta liste. */
+function texteBandeau(s) {
+  if (s.media === "film") {
+    if (estTermine(s)) return s.duree ? `Vu · ${duree(s.duree)}` : "Vu";
+    return s.duree ? `À voir · ${duree(s.duree)}` : "À voir";
+  }
+  return texteOuJenSuis(s);
+}
+
 function carte(a, genre, suiviForce = null) {
-  const suivi = suiviForce || listeCache.find((s) => s.id === a.id);
+  const suivi = suiviForce || suiviDe(a);
 
   let bandeau = "", chaud = false;
   if (genre === "avenir") {
@@ -932,7 +1073,7 @@ function carte(a, genre, suiviForce = null) {
     bandeau = `${sxe(suivi.prochain.saison, suivi.prochain.episode)} ${quand(suivi.prochain.date)}`;
     chaud = true;
   } else if (suivi) {
-    bandeau = texteOuJenSuis(suivi);
+    bandeau = texteBandeau(suivi);
   }
 
   const meta = [a.annee, a.genres?.[0]].filter(Boolean).join(" · ");
@@ -940,7 +1081,7 @@ function carte(a, genre, suiviForce = null) {
   const el = document.createElement("button");
   el.type = "button";
   el.className = "carte";
-  el.dataset.serie = a.id;
+  el.dataset.cle = `${a.media}:${a.id}`;
   el.innerHTML = `
     <span class="carte-img">
       ${jaquette(a.cover, a.title)}
@@ -976,20 +1117,22 @@ document.addEventListener("click", (ev) => {
    note — puis la fiche complète (saisons, plateformes, résumé) arrive et
    complète l'affichage sur place. Si entre-temps tu es reparti ailleurs, la
    réponse est ignorée : elle ne doit pas écraser la fiche que tu regardes. */
+const memeFiche = (a, b) => a && b && a.id === b.id && a.media === b.media;
+
 async function ouvrirEtCompleter(base) {
   ouvrirFiche(base);
   if (base.locale || base.complet) return;
 
   if (!base.resume) $("fiche-resume").textContent = "Chargement des détails…";
   try {
-    const complet = await parIdentifiant(base.id);
-    if (ficheCourante?.id !== base.id) return;
+    const complet = await parIdentifiant(base.media, base.id);
+    if (!memeFiche(ficheCourante, base)) return;
     ficheCourante = complet;
     majFiche();
     synchroniser(complet);
   } catch (err) {
     console.warn("Fiche :", err.message);
-    if (ficheCourante?.id === base.id && !ficheCourante.resume) $("fiche-resume").textContent = "";
+    if (memeFiche(ficheCourante, base) && !ficheCourante.resume) $("fiche-resume").textContent = "";
   }
 }
 
@@ -1008,10 +1151,30 @@ function champsDiffusion(a) {
   };
 }
 
+/* Pour un film, il n'y a rien qui bouge : on complète seulement ce qui manque
+   (durée, genres, année), par exemple après un import. */
+function champsFilm(a) {
+  return {
+    duree:  Math.min(a.duree || 0, 2000),
+    genres: (a.genres || []).slice(0, 12),
+    annee:  (a.annee || "").slice(0, 4),
+    majAt:  Date.now()
+  };
+}
+
 async function synchroniser(a) {
   if (!currentUser || !a?.complet) return;
-  const s = listeCache.find((x) => x.id === a.id);
+  const s = suiviDe(a);
   if (!s) return;
+
+  if (a.media === "film") {
+    if (s.duree && s.annee) return;
+    const maj = champsFilm(a);
+    if (!s.cover && a.cover) maj.cover = a.cover;
+    try { await updateDoc(refElement(currentUser.uid, "film", s.id), maj); }
+    catch (err) { console.warn("Synchronisation :", err.code, err.message); }
+    return;
+  }
 
   const neuf = champsDiffusion(a);
   const change =
@@ -1044,7 +1207,7 @@ async function majDiffusions() {
     .slice(0, 80);
 
   await enParallele(aVerifier, 3, async (s) => {
-    try { await synchroniser(await parIdentifiant(s.id, { frais: true })); }
+    try { await synchroniser(await parIdentifiant("serie", s.id, { frais: true })); }
     catch (err) { console.warn("Diffusion de", s.title, ":", err.message); }
   });
 }
@@ -1056,28 +1219,80 @@ async function enParallele(liste, n, tache) {
   await Promise.all(Array.from({ length: Math.min(n, liste.length) }, ouvrier));
 }
 
-/* ══════════════════ Ma liste ══════════════════ */
+/* ══════════════════ Ma liste ══════════════════
+
+   Deux listes par compte, chacune écoutée en direct. L'affichage choisit
+   ensuite : les séries, les films, ou tout ensemble. */
+
+function apresChangement() {
+  afficherListe();
+  if (ficheCourante) majFiche();
+  rafraichirCartes();
+  majPublication();
+  if (!$("view-succes").hidden) afficherSucces();
+  planifierVitrine();   // les compteurs publiés suivent la liste
+}
 
 function suivreListe(uid) {
   $("loading").hidden = false;
-  const q = query(collection(db, "users", uid, COLLECTION), orderBy("addedAt", "asc"));
+  const erreur = (err) => {
+    console.error("Firestore :", err.code, err.message);
+    $("loading").hidden = false;
+    $("loading").textContent = "Impossible de lire ta liste. Vérifie les règles Firestore.";
+  };
 
-  unsubscribe = onSnapshot(q, (snap) => {
+  const qSeries = query(collection(db, "users", uid, COLLECTIONS.serie), orderBy("addedAt", "asc"));
+  unsubscribe = onSnapshot(qSeries, (snap) => {
     $("loading").hidden = true;
-    listeCache = snap.docs.map((d) => d.data());
-    afficherListe();
-    if (ficheCourante) majFiche();
-    rafraichirCartes();
-    majPublication();
-    if (!$("view-succes").hidden) afficherSucces();
-    planifierVitrine();   // les compteurs publiés suivent la liste
+    listeCache = snap.docs.map((d) => ({ ...d.data(), media: "serie" }));
+    apresChangement();
     afficherMesProchains();
     majDiffusions();      // une fois par visite, en arrière-plan
-  }, (err) => {
-    console.error("Firestore :", err.code, err.message);
-    $("loading").textContent = "Impossible de lire ta liste. Vérifie les règles Firestore.";
-  });
+  }, erreur);
+
+  const qFilms = query(collection(db, "users", uid, COLLECTIONS.film), orderBy("addedAt", "asc"));
+  unsubFilms = onSnapshot(qFilms, (snap) => {
+    filmsCache = snap.docs.map((d) => ({ ...d.data(), media: "film" }));
+    apresChangement();
+  }, erreur);
 }
+
+/* Séries, films, ou tout ensemble : le choix est retenu d'une visite à l'autre. */
+let vueListe = "serie";
+try { vueListe = localStorage.getItem("seriezone-vue") || "serie"; } catch {}
+if (!["serie", "film", "tout"].includes(vueListe)) vueListe = "serie";
+
+function appliquerVueListe() {
+  document.querySelectorAll(".type-liste").forEach((b) => {
+    const actif = b.dataset.vueListe === vueListe;
+    b.classList.toggle("is-active", actif);
+    b.setAttribute("aria-pressed", String(actif));
+  });
+
+  // Un film n'est jamais « en cours » ni « abandonné » : ces filtres n'ont de
+  // sens que pour les séries.
+  const film = vueListe === "film";
+  document.querySelectorAll(".filtre").forEach((b) => {
+    const s = b.dataset.statut;
+    b.hidden = film && (s === "en_cours" || s === "abandonne");
+    if (s === "termine") b.textContent = film ? "Vus" : vueListe === "tout" ? "Terminés ou vus" : "Terminées";
+  });
+  if (film && (filtreStatut === "en_cours" || filtreStatut === "abandonne")) {
+    filtreStatut = "tous";
+    document.querySelectorAll(".filtre").forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.statut === "tous"));
+  }
+  $("ouvrir-serie").textContent = film ? "Ajouter un film" : vueListe === "tout" ? "Ajouter à la main" : "Ajouter une série";
+}
+
+document.querySelectorAll(".type-liste").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    vueListe = btn.dataset.vueListe;
+    try { localStorage.setItem("seriezone-vue", vueListe); } catch {}
+    appliquerVueListe();
+    afficherListe();
+  });
+});
 
 document.querySelectorAll(".filtre").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -1096,7 +1311,7 @@ document.querySelectorAll(".filtre").forEach((btn) => {
    ════════════════════════════════════════════════════ */
 
 const TRIS = {
-  defaut: "En cours d'abord",
+  defaut: "À suivre d'abord",
   ajout:  "Ordre d'ajout",
   recent: "Ajouts récents",
   alpha:  "Alphabétique"
@@ -1215,36 +1430,59 @@ addEventListener("keydown", (e) => { if (e.key === "Escape") fermerTris(); });
 construireTri("tri-liste", () => afficherListe());
 construireTri("tri-profil", () => afficherListeProfil());
 
+const pluriel = (n, mot, motPluriel = mot + "s") => `${n} ${n > 1 ? motPluriel : mot}`;
+const stat = (n, texte) => `<p><strong>${chiffre(n)}</strong> ${texte}</p>`;
+
+function elementsDeLaVue() {
+  if (vueListe === "film") return filmsCache;
+  if (vueListe === "tout") return tousLesSuivis();
+  return listeCache;
+}
+
 function afficherListe() {
+  appliquerVueListe();
   const grille = $("liste");
   grille.innerHTML = "";
 
-  $("stats").hidden = listeCache.length === 0;
+  const elements = elementsDeLaVue();
+  $("stats").hidden = elements.length === 0;
 
-  const episodes = listeCache.reduce((n, s) => n + s.vus, 0);
-  const termines = listeCache.filter(estTermine).length;
+  const filmsVus = filmsCache.filter(estTermine);
+  const heures = Math.round(filmsVus.reduce((n, f) => n + (f.duree || 0), 0) / 60);
+  const episodes = listeCache.reduce((n, s) => n + (s.vus || 0), 0);
 
-  $("stat-suivis").textContent   = listeCache.length;
-  $("stat-episodes").textContent = episodes;
-  $("stat-termines").textContent = termines;
+  const s = (n, un, plusieurs) => stat(n, n > 1 ? plusieurs : un);
+  const finies = listeCache.filter(estTermine).length;
+  if (vueListe === "film") {
+    $("stats").innerHTML = s(filmsCache.length, "film dans ta liste", "films dans ta liste")
+      + s(filmsVus.length, "vu", "vus") + s(heures, "heure de film", "heures de film");
+  } else if (vueListe === "tout") {
+    $("stats").innerHTML = s(listeCache.length, "série", "séries") + s(filmsCache.length, "film", "films")
+      + s(finies + filmsVus.length, "terminé ou vu", "terminés ou vus");
+  } else {
+    $("stats").innerHTML = s(listeCache.length, "série suivie", "séries suivies")
+      + s(episodes, "épisode vu", "épisodes vus") + s(finies, "terminée", "terminées");
+  }
 
   /* La recherche est purement locale : la liste est déjà en mémoire, aucune
      requête n'est nécessaire. Le titre est normalisé des deux côtés — sans
      accents ni ponctuation — pour que « re zero » trouve « Re:ZERO ». */
   const cherche = cleTitre(rechercheListe);
 
-  const visibles = trier(listeCache
+  const visibles = trier(elements
     .filter((s) => filtreStatut === "tous" || s.statut === filtreStatut)
     .filter((s) => !cherche || cleTitre(s.title).includes(cherche)));
 
-  if (listeCache.length === 0) {
-    $("liste-vide").textContent =
-      "Rien ici pour l'instant. Passe par À venir ou Découvrir pour ajouter une série.";
+  const aucun = { serie: "Aucune série", film: "Aucun film", tout: "Aucun titre" }[vueListe];
+  if (elements.length === 0) {
+    $("liste-vide").textContent = vueListe === "film"
+      ? "Aucun film pour l'instant. Passe par Découvrir, onglet Films, pour en ajouter."
+      : "Rien ici pour l'instant. Passe par À venir ou Découvrir pour en ajouter.";
     $("liste-vide").hidden = false;
   } else if (visibles.length === 0) {
     $("liste-vide").textContent = cherche
-      ? `Aucune série de ta liste ne correspond à « ${rechercheListe.trim()} ».`
-      : "Aucune série avec ce statut.";
+      ? `${aucun} de ta liste ne correspond à « ${rechercheListe.trim()} ».`
+      : `${aucun} avec ce statut.`;
     $("liste-vide").hidden = false;
   } else {
     $("liste-vide").hidden = true;
@@ -1254,18 +1492,23 @@ function afficherListe() {
     const el = document.createElement("button");
     el.type = "button";
     el.className = "carte";
-    el.dataset.serie = s.id;
+    el.dataset.cle = `${s.media}:${s.id}`;
 
-    const badge = estTermine(s) ? `<span class="carte-suivi">Terminée</span>`
+    const film = s.media === "film";
+    const badge = film ? (estTermine(s) ? `<span class="carte-suivi">Vu</span>` : "")
+      : estTermine(s) ? `<span class="carte-suivi">Terminée</span>`
       : (s.statut === "en_cours" && estAJour(s) ? `<span class="carte-suivi est-ajour">À jour</span>` : "");
+    const meta = vueListe === "tout"
+      ? `${film ? "Film" : "Série"} · ${libelleStatut(s)}` : libelleStatut(s);
+
     el.innerHTML = `
       <span class="carte-img">
         ${jaquette(s.cover, s.title)}
         ${badge}
-        <span class="carte-bandeau">${escapeHtml(texteOuJenSuis(s))}</span>
+        <span class="carte-bandeau">${escapeHtml(texteBandeau(s))}</span>
       </span>
       <span class="carte-nom">${escapeHtml(s.title)}</span>
-      <span class="carte-meta">${LIBELLE_STATUT[s.statut] || ""}</span>
+      <span class="carte-meta">${escapeHtml(meta)}</span>
       <span class="carte-note">${texteNote(s)}</span>`;
 
     el.__suivi = s;
@@ -1278,10 +1521,19 @@ const LIBELLE_STATUT = {
   termine: "Terminée", abandonne: "Abandonnée"
 };
 
+const libelleStatut = (s) =>
+  s.media === "film" ? (estTermine(s) ? "Vu" : "À voir") : (LIBELLE_STATUT[s.statut] || "");
+
 /* Reconstitue une fiche minimale depuis ce qui est enregistré, pour que la
    consultation reste possible sans réseau. */
-const depuisSuivi = (s) => ({
-  locale: estLocale(s.id),
+const depuisSuivi = (s) => s.media === "film" ? ({
+  media: "film", locale: estLocale(s.id),
+  id: s.id, title: s.title, original: "", cover: s.cover, resume: "",
+  genres: s.genres || [], annee: s.annee || null, debut: "", diffusion: "",
+  duree: s.duree || 0, realisateurs: [], popularite: 0, liens: null,
+  complet: false
+}) : ({
+  media: "serie", locale: estLocale(s.id),
   id: s.id, title: s.title, original: "", cover: s.cover, resume: "",
   genres: s.genres || [], annee: null, anneeFin: null, debut: "",
   statutDiff: "", diffusion: s.finie ? "finie" : "", type: s.format || "",
@@ -1291,15 +1543,16 @@ const depuisSuivi = (s) => ({
 });
 
 function rafraichirCartes() {
-  document.querySelectorAll(".carte[data-serie]").forEach((el) => {
-    const suivi = listeCache.find((s) => s.id === el.dataset.serie);
+  document.querySelectorAll(".carte[data-cle]").forEach((el) => {
+    const [media, id] = el.dataset.cle.split(/:(.*)/);
+    const suivi = cacheDe(media).find((s) => s.id === id);
 
     const note = el.querySelector(".carte-note");
     if (note) note.textContent = texteNote(suivi);
 
     const img = el.querySelector(".carte-img");
     const badge = img.querySelector(".carte-suivi");
-    if (el.closest("#liste") || el.closest("#mes-prochains")) return;
+    if (el.closest("#liste") || el.closest("#mes-prochains") || el.closest("#profil-liste")) return;
     badge?.remove();
     if (suivi) img.querySelector("img, .carte-sans-image")?.insertAdjacentHTML("afterend", badgeSuivi(suivi));
   });
@@ -1329,7 +1582,7 @@ function ouvrirSuppression() {
   $("supprimer-mdp").value = "";
   $("supprimer-erreur").hidden = true;
   $("supprimer-detail").textContent =
-    `${listeCache.length} série${listeCache.length > 1 ? "s" : ""} suivie${listeCache.length > 1 ? "s" : ""}` +
+    `${pluriel(listeCache.length, "série")}, ${pluriel(filmsCache.length, "film")}` +
     `, tes notes, ton pseudo et ton profil public s'il est publié.`;
   setTimeout(() => $("supprimer-mot").focus(), 100);
 }
@@ -1357,8 +1610,10 @@ async function effacerDonnees(uid, pseudo) {
   const OPS = 400;
   const refs = [];
 
-  const series = await getDocs(collection(db, "users", uid, COLLECTION));
-  series.forEach((d) => refs.push(refSerie(uid, d.id)));
+  for (const media of ["serie", "film"]) {
+    const snap = await getDocs(collection(db, "users", uid, COLLECTIONS[media]));
+    snap.forEach((d) => refs.push(refElement(uid, media, d.id)));
+  }
 
   refs.push(doc(db, "profilsPublics", uid));
   if (pseudo) refs.push(doc(db, "usernames", pseudo.toLowerCase()));
@@ -1396,6 +1651,7 @@ $("supprimer-valider").addEventListener("click", async () => {
     try { pseudo = (await getDoc(doc(db, "users", uid))).data()?.pseudo || null; } catch {}
 
     if (unsubscribe) { unsubscribe(); unsubscribe = null; }   // plus d'écoute pendant l'effacement
+    if (unsubFilms)  { unsubFilms();  unsubFilms = null; }
 
     await effacerDonnees(uid, pseudo);
     await deleteUser(user);
@@ -1475,11 +1731,18 @@ const SUCCES = [
   { famille: "Curiosité", titre: "Histoires courtes",   desc: "Terminer 5 mini-séries",      cible: 5,  mesure: (b) => b.minis },
   { famille: "Curiosité", titre: "Le réel",             desc: "Terminer 3 séries documentaires", cible: 3, mesure: (b) => b.docs },
 
-  { famille: "Tenue de liste", titre: "Premier avis",   desc: "Noter une série",             cible: 1,   mesure: (b) => b.notees },
-  { famille: "Tenue de liste", titre: "Critique",       desc: "Noter 50 séries",             cible: 50,  mesure: (b) => b.notees },
-  { famille: "Tenue de liste", titre: "Juré",           desc: "Noter 150 séries",            cible: 150, mesure: (b) => b.notees },
-  { famille: "Tenue de liste", titre: "Archiviste",     desc: "Créer 5 séries à la main",    cible: 5,   mesure: (b) => b.locales },
-  { famille: "Tenue de liste", titre: "Exigeant",       desc: "Mettre la note maximale à 10 séries", cible: 10, mesure: (b) => b.parfaites },
+  { famille: "Cinéma", titre: "Première séance",       desc: "Voir un premier film",        cible: 1,   mesure: (b) => b.filmsVus },
+  { famille: "Cinéma", titre: "Cinéphile",             desc: "Voir 25 films",               cible: 25,  mesure: (b) => b.filmsVus },
+  { famille: "Cinéma", titre: "Abonné aux salles",     desc: "Voir 100 films",              cible: 100, mesure: (b) => b.filmsVus },
+  { famille: "Cinéma", titre: "Cinémathèque",          desc: "Voir 300 films",              cible: 300, mesure: (b) => b.filmsVus },
+  { famille: "Cinéma", titre: "Cent heures",           desc: "Passer 100 heures devant des films", cible: 100, mesure: (b) => b.heuresFilms },
+  { famille: "Cinéma", titre: "Tous les genres",       desc: "Voir des films de 10 genres différents", cible: 10, mesure: (b) => b.genresFilms.size },
+
+  { famille: "Tenue de liste", titre: "Premier avis",   desc: "Noter une série ou un film",  cible: 1,   mesure: (b) => b.notees },
+  { famille: "Tenue de liste", titre: "Critique",       desc: "Noter 50 séries ou films",    cible: 50,  mesure: (b) => b.notees },
+  { famille: "Tenue de liste", titre: "Juré",           desc: "Noter 150 séries ou films",   cible: 150, mesure: (b) => b.notees },
+  { famille: "Tenue de liste", titre: "Archiviste",     desc: "Créer 5 titres à la main",    cible: 5,   mesure: (b) => b.locales },
+  { famille: "Tenue de liste", titre: "Exigeant",       desc: "Mettre la note maximale à 10 titres", cible: 10, mesure: (b) => b.parfaites },
   { famille: "Tenue de liste", titre: "Sur tous les fronts", desc: "Suivre 5 séries en cours en même temps", cible: 5, mesure: (b) => b.enCours }
 ];
 
@@ -1501,15 +1764,23 @@ function bilanSucces() {
     if (fini && (s.episodes || 0) >= 100) fleuve++;
     if (fini && (s.saisons || []).filter(Boolean).length >= 7) sagas++;
     if (!fini && !s.finie && s.statut === "en_cours" && estAJour(s)) ajour++;
-    if (s.note && s.note === (s.sur || 10)) parfaites++;
   });
+
+  const vus = filmsCache.filter(estTermine);
+  const genresFilms = new Set();
+  vus.forEach((f) => (f.genres || []).forEach((g) => genresFilms.add(g)));
+  const tout = tousLesSuivis();
+  tout.forEach((s) => { if (s.note && s.note === (s.sur || 10)) parfaites++; });
 
   return {
     termines: listeCache.filter(estTermine).length,
     enCours:  listeCache.filter((s) => s.statut === "en_cours").length,
     episodes: listeCache.reduce((n, s) => n + (s.vus || 0), 0),
-    notees:   listeCache.filter((s) => s.note).length,
-    locales:  listeCache.filter((s) => estLocale(s.id)).length,
+    notees:   tout.filter((s) => s.note).length,
+    locales:  tout.filter((s) => estLocale(s.id)).length,
+    filmsVus: vus.length,
+    heuresFilms: Math.floor(vus.reduce((n, f) => n + (f.duree || 0), 0) / 60),
+    genresFilms,
     genres, minis, docs, fleuve, parfaites, sagas, saisons, ajour
   };
 }
@@ -1522,7 +1793,8 @@ function afficherSucces() {
   const b = bilanSucces();
   const obtenus = SUCCES.filter((x) => x.mesure(b) >= x.cible).length;
   $("succes-bilan").textContent =
-    `${obtenus} succès sur ${SUCCES.length} · ${chiffre(b.saisons)} saison${b.saisons > 1 ? "s" : ""} terminée${b.saisons > 1 ? "s" : ""}.`;
+    `${obtenus} succès sur ${SUCCES.length} · ${chiffre(b.saisons)} saison${b.saisons > 1 ? "s" : ""} terminée${b.saisons > 1 ? "s" : ""}` +
+    ` · ${chiffre(b.filmsVus)} film${b.filmsVus > 1 ? "s" : ""} vu${b.filmsVus > 1 ? "s" : ""}.`;
 
   const zone = $("succes-liste");
   zone.innerHTML = "";
@@ -1584,10 +1856,12 @@ let profilVu       = null;      // profil consulté : { uid, pseudo, avatar, ser
 let filtreProfil   = "tous";
 let minuteurVitrine;
 
-const compteurs = (liste) => ({
-  series:   liste.length,
-  episodes: liste.reduce((n, s) => n + (s.vus || 0), 0),
-  termines: liste.filter((s) => s.statut === "termine").length
+const compteurs = () => ({
+  series:   listeCache.length,
+  episodes: listeCache.reduce((n, s) => n + (s.vus || 0), 0),
+  termines: listeCache.filter(estTermine).length,
+  films:    filmsCache.length,
+  filmsVus: filmsCache.filter(estTermine).length
 });
 
 async function chargerEtatPublication() {
@@ -1602,10 +1876,10 @@ async function chargerEtatPublication() {
 }
 
 function majPublication() {
-  const c = compteurs(listeCache);
+  const c = compteurs();
   $("publier").textContent = profilPublic ? "Rendre privé" : "Publier mon profil";
   $("publication-etat").textContent = profilPublic
-    ? `Visible par les membres : ton pseudo, ton avatar, tes ${c.series} séries et tes notes.`
+    ? `Visible par les membres : ton pseudo, ton avatar, tes ${pluriel(c.series, "série")}, tes ${pluriel(c.films, "film")} et tes notes.`
     : "Ton profil est privé. Personne ne voit ta liste ni tes notes.";
 }
 
@@ -1615,7 +1889,7 @@ function majPublication() {
 async function ecrireVitrine() {
   if (!currentUser || !profilPublic) return;
 
-  const c = compteurs(listeCache);
+  const c = compteurs();
   const data = {
     pseudo: $("user-email").textContent || "membre",
     ...c,
@@ -1721,6 +1995,7 @@ function afficherProfils() {
         <span><strong>${p.series || 0}</strong> séries</span>
         <span><strong>${nombreCourt(p.episodes || 0)}</strong> épisodes</span>
         <span><strong>${p.termines || 0}</strong> terminées</span>
+        <span><strong>${p.films || 0}</strong> films</span>
       </span>`;
 
     el.addEventListener("click", () => ouvrirProfil(p));
@@ -1740,7 +2015,8 @@ function ouvrirApercu(s) {
   if (avecImage) $("apercu-image").src = s.cover;
   else $("apercu-vide").textContent = initiales(s.title);
 
-  $("apercu-statut").textContent = LIBELLE_STATUT[s.statut] || "—";
+  $("apercu-statut").textContent = libelleStatut(s) || "—";
+  $("apercu-ligne-episodes").hidden = s.media === "film";
 
   const vus = s.vus || 0;
   $("apercu-episodes").textContent = s.episodes
@@ -1763,9 +2039,20 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !$("apercu-screen").hidden) fermerApercu();
 });
 
+/* La liste d'un membre se lit comme la tienne : séries, films, ou tout. */
+let vueProfil = "serie";
+
+document.querySelectorAll(".type-profil").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    vueProfil = btn.dataset.vueProfil;
+    afficherListeProfil();
+  });
+});
+
 async function ouvrirProfil(p) {
   profilVu = { ...p, series_liste: null };
   filtreProfil = "tous";
+  vueProfil = "serie";
 
   $("profil-pseudo").textContent = p.pseudo || "membre";
   $("profil-avatar").hidden = !(p.avatar && AVATARS.includes(p.avatar));
@@ -1774,7 +2061,8 @@ async function ouvrirProfil(p) {
   $("profil-stats").innerHTML = `
     <p><strong>${p.series || 0}</strong> séries suivies</p>
     <p><strong>${nombreCourt(p.episodes || 0)}</strong> épisodes vus</p>
-    <p><strong>${p.termines || 0}</strong> terminées</p>`;
+    <p><strong>${p.termines || 0}</strong> terminées</p>
+    <p><strong>${p.films || 0}</strong> films, dont <strong>${p.filmsVus || 0}</strong> vus</p>`;
 
   document.querySelectorAll(".filtre-profil").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.statut === "tous"));
@@ -1784,10 +2072,12 @@ async function ouvrirProfil(p) {
   showView("profil");
 
   try {
-    const snap = await getDocs(collection(db, "users", p.uid, COLLECTION));
+    const [series, films] = await Promise.all(["serie", "film"].map((media) =>
+      getDocs(collection(db, "users", p.uid, COLLECTIONS[media]))
+        .then((snap) => snap.docs.map((d) => ({ ...d.data(), media })))));
     if (profilVu?.uid !== p.uid) return;         // parti ailleurs entre-temps
-    profilVu.series_liste = snap.docs.map((d) => d.data())
-      .sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    profilVu.series_liste = series;
+    profilVu.films_liste = films;
     afficherListeProfil();
   } catch (err) {
     console.error("Liste du profil :", err.code, err.message);
@@ -1798,7 +2088,23 @@ async function ouvrirProfil(p) {
 
 function afficherListeProfil() {
   const zone = $("profil-liste");
-  const toutes = profilVu?.series_liste || [];
+  const series = profilVu?.series_liste || [];
+  const films  = profilVu?.films_liste || [];
+  const toutes = vueProfil === "film" ? films : vueProfil === "tout" ? [...series, ...films] : series;
+
+  document.querySelectorAll(".type-profil").forEach((b) => {
+    const actif = b.dataset.vueProfil === vueProfil;
+    b.classList.toggle("is-active", actif);
+    b.setAttribute("aria-pressed", String(actif));
+  });
+  document.querySelectorAll(".filtre-profil").forEach((b) => {
+    if (b.dataset.statut === "en_cours") b.hidden = vueProfil === "film";
+    if (b.dataset.statut === "termine") b.textContent = vueProfil === "film" ? "Vus" : vueProfil === "tout" ? "Terminés ou vus" : "Terminées";
+  });
+  if (vueProfil === "film" && filtreProfil === "en_cours") filtreProfil = "tous";
+  document.querySelectorAll(".filtre-profil").forEach((b) =>
+    b.classList.toggle("is-active", b.dataset.statut === filtreProfil));
+
   const vues = trier(
     filtreProfil === "tous" ? toutes : toutes.filter((s) => s.statut === filtreProfil));
 
@@ -1812,11 +2118,11 @@ function afficherListeProfil() {
     el.innerHTML = `
       <span class="carte-img">
         ${jaquette(s.cover, s.title)}
-        ${s.statut === "termine" ? `<span class="carte-bandeau">Terminé</span>` : ""}
+        ${s.statut === "termine" ? `<span class="carte-bandeau">${s.media === "film" ? "Vu" : "Terminée"}</span>` : ""}
       </span>
       <span class="carte-nom">${escapeHtml(s.title)}</span>
       <span class="carte-bas">
-        <span class="carte-meta">${LIBELLE_STATUT[s.statut] || ""}</span>
+        <span class="carte-meta">${escapeHtml(vueProfil === "tout" ? `${s.media === "film" ? "Film" : "Série"} · ${libelleStatut(s)}` : libelleStatut(s))}</span>
         <span class="carte-note">${texteNote(s)}</span>
       </span>`;
 
@@ -1881,14 +2187,39 @@ async function preparerCouverture(fichier) {
   return data;
 }
 
-function ouvrirSerie(suivi = null) {
+let mediaEdition = "serie";   // série ou film, dans la fenêtre d'ajout
+
+/* La même fenêtre sert aux séries et aux films : un film n'a ni épisodes ni
+   « en cours ». */
+function adapterFenetre(media, suivi) {
+  mediaEdition = media;
+  const film = media === "film";
+  $("serie-type").value = media;
+  $("serie-champ-type").hidden = !!suivi;   // on ne change pas la nature d'un titre existant
+  $("serie-episodes-duo").hidden = film;
+  $("serie-titre-fenetre").textContent = suivi
+    ? (film ? "Modifier le film" : "Modifier la série")
+    : (film ? "Ajouter un film" : "Ajouter une série");
+
+  const choix = film
+    ? [["termine", "Vu"], ["a_voir", "À voir"]]
+    : [["termine", "Terminée"], ["en_cours", "En cours"], ["a_voir", "À voir"], ["abandonne", "Abandonnée"]];
+  const actuel = $("serie-statut").value;
+  $("serie-statut").innerHTML = choix.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+  $("serie-statut").value = choix.some(([v]) => v === actuel) ? actuel : "termine";
+}
+
+$("serie-type").addEventListener("change", () => adapterFenetre($("serie-type").value, null));
+
+function ouvrirSerie(suivi = null, mediaVoulu = null) {
   if (!currentUser) return ouvrirConnexion("Crée un compte pour tenir ta liste.", "signup");
 
   serieEnEdition = suivi?.id || null;
   couvertureChoisie = suivi?.cover || null;
 
   $("serie-screen").hidden = false;
-  $("serie-titre-fenetre").textContent = suivi ? "Modifier la série" : "Ajouter une série";
+  $("serie-statut").value = suivi?.statut || "termine";
+  adapterFenetre(suivi?.media || mediaVoulu || (vueListe === "film" ? "film" : "serie"), suivi);
   $("serie-valider").textContent = suivi ? "Enregistrer" : "Ajouter à ma liste";
 
   $("serie-nom").value      = suivi?.title || "";
@@ -1932,7 +2263,7 @@ addEventListener("keydown", (e) => {
 });
 
 $("fiche-modifier").addEventListener("click", () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (s) ouvrirSerie(s);
 });
 
@@ -1976,14 +2307,21 @@ $("serie-valider").addEventListener("click", async () => {
   const note = Number.isInteger(brute) && brute >= 1 ? Math.min(brute, sur) : null;
   echellePreferee = sur;
 
+  const media = mediaEdition;
+  const film = media === "film";
+  const cache = cacheDe(media);
+  const ancienne = serieEnEdition ? cache.find((x) => x.id === serieEnEdition) : null;
+
   const donnees = {
     id: serieEnEdition || nouvelIdLocal(),
     title: titre.slice(0, 300),
     cover: couvertureChoisie || "",
-    episodes, vus,
     statut: $("serie-statut").value,
     addedAt: Date.now()
   };
+  if (!film) Object.assign(donnees, { episodes, vus });
+  // Un film détaché garde la durée qu'il avait.
+  if (film && ancienne?.duree) donnees.duree = ancienne.duree;
   if (note) { donnees.note = note; donnees.sur = sur; }
 
   /* Détacher, c'est changer d'identifiant : « local_… » est précisément ce
@@ -1995,16 +2333,16 @@ $("serie-valider").addEventListener("click", async () => {
 
   $("serie-valider").disabled = true;
   try {
-    const ref = refSerie(currentUser.uid, donnees.id);
+    const ref = refElement(currentUser.uid, media, donnees.id);
+    const etaitAffichee = memeFiche(ficheCourante, { media, id: serieEnEdition });
 
     if (detache) {
-      const ancien = listeCache.find((x) => x.id === serieEnEdition);
-      donnees.addedAt = ancien?.addedAt || donnees.addedAt;
+      donnees.addedAt = ancienne?.addedAt || donnees.addedAt;
       await setDoc(ref, donnees);
-      await deleteDoc(refSerie(currentUser.uid, serieEnEdition));
-      toast("Série détachée de TMDB et modifiée.");
-      if (ficheCourante?.id === serieEnEdition) {
-        ficheCourante = depuisSuivi({ ...donnees, note, sur });
+      await deleteDoc(refElement(currentUser.uid, media, serieEnEdition));
+      toast(`${film ? "Film détaché" : "Série détachée"} de TMDB et modifié${film ? "" : "e"}.`);
+      if (etaitAffichee) {
+        ficheCourante = depuisSuivi({ ...donnees, note, sur, media });
         majFiche();
       }
       fermerSerie();
@@ -2013,25 +2351,21 @@ $("serie-valider").addEventListener("click", async () => {
 
     if (serieEnEdition) {
       // On garde la date d'ajout d'origine : elle ordonne la liste.
-      const ancien = listeCache.find((x) => x.id === serieEnEdition);
-      donnees.addedAt = ancien?.addedAt || donnees.addedAt;
+      donnees.addedAt = ancienne?.addedAt || donnees.addedAt;
       if (!note) { donnees.note = deleteField(); donnees.sur = deleteField(); }
       await updateDoc(ref, donnees);
-      toast("Série modifiée.");
-      if (ficheCourante?.id === serieEnEdition) {
-        ficheCourante = depuisSuivi({ ...donnees, note, sur });
+      toast(film ? "Film modifié." : "Série modifiée.");
+      if (etaitAffichee) {
+        ficheCourante = depuisSuivi({ ...donnees, note, sur, media });
         majFiche();
       }
     } else {
       await setDoc(ref, donnees);
       toast(`${titre} est dans ta liste.`);
-      // Tableau de bord : un ajout à la main compte aussi comme un ajout à la liste
-      window.suivi?.contenu("ajout", donnees.id, titre);
-      window.suivi?.action("ajout-liste");
     }
     fermerSerie();
   } catch (err) {
-    console.error("Série :", err.code, err.message);
+    console.error("Ajout manuel :", err.code, err.message);
     $("serie-erreur").textContent = "L'enregistrement a échoué. L'image est peut-être trop lourde.";
     $("serie-erreur").hidden = false;
   } finally {
@@ -2184,15 +2518,18 @@ function variante(titre) {
    une trentaine de vagues de quelques dixièmes de seconde. */
 const LOT = 12;
 
+/* L'import se fait soit en séries, soit en films : on le choisit avant. */
+let mediaImport = "serie";
+
 const simplifier = (m) => ({
   id:       String(m.id),
-  title:    m.name || m.original_name || "Sans titre",
+  title:    m.name || m.title || m.original_name || m.original_title || "Sans titre",
   cover:    affiche(m.poster_path, "w185"),
   episodes: 0,
   format:   "",
-  genres:   (m.genre_ids || []).map((id) => GENRES[id]).filter(Boolean),
-  annee:    (m.first_air_date || "").slice(0, 4) || null,
-  noms:     [m.name, m.original_name].filter(Boolean).map(cleTitre)
+  genres:   (m.genre_ids || []).map((id) => (mediaImport === "film" ? GENRES_FILMS : GENRES)[id]).filter(Boolean),
+  annee:    (m.first_air_date || m.release_date || "").slice(0, 4) || null,
+  noms:     [m.name, m.original_name, m.title, m.original_title].filter(Boolean).map(cleTitre)
 });
 
 /* Combien on peut faire confiance à un résultat. Zéro veut dire qu'aucun des
@@ -2257,7 +2594,7 @@ function classer(entree) {
 
 async function interrogerLot(titres) {
   const reponses = await Promise.all(titres.map((t) =>
-    tmdb("search/tv", { query: t, include_adult: false })));
+    tmdb(mediaImport === "film" ? "search/movie" : "search/tv", { query: t, include_adult: false })));
   // Quatre propositions par titre suffisent pour corriger une erreur.
   return reponses.map((d) => (d.results || []).slice(0, 4).map(simplifier));
 }
@@ -2332,16 +2669,26 @@ function etapeImport(nom) {
   $("import-resultats").hidden = nom !== "resultats";
 }
 
+function adapterImport() {
+  const film = $("import-type").value === "film";
+  $("import-statut-libelle").textContent = film ? "Ces films sont" : "Ces séries sont";
+  $("import-statut").querySelector('[value="termine"]').textContent = film ? "Déjà vus" : "Déjà vues en entier";
+  $("import-statut").querySelector('[value="en_cours"]').hidden = film;
+  if (film && $("import-statut").value === "en_cours") $("import-statut").value = "a_voir";
+}
+$("import-type").addEventListener("change", adapterImport);
+
 function ouvrirImport() {
   if (!currentUser) return ouvrirConnexion("Crée un compte pour importer ta liste.");
   $("import-screen").hidden = false;
+  $("import-type").value = vueListe === "film" ? "film" : "serie";
+  adapterImport();
   etapeImport("saisie");
   setTimeout(() => $("import-texte").focus(), 100);
 }
 
 function fermerImport() {
   if (importOccupe) return;   // une écriture en cours ne se referme pas à moitié
-  window.suivi?.action("import-liste"); // tableau de bord : une importation de liste
   $("import-screen").hidden = true;
 }
 
@@ -2359,6 +2706,7 @@ addEventListener("keydown", (e) => {
 });
 
 $("import-analyser").addEventListener("click", async () => {
+  mediaImport = $("import-type").value === "film" ? "film" : "serie";
   const echelle = Number($("import-echelle").value) || 10;
 
   echelleImport = echelleRangee(echelle);
@@ -2520,7 +2868,7 @@ function ligneImport(e) {
     vide.hidden     = trouve;
     if (trouve) vignette.src = e.choix.cover;
 
-    const deja = trouve && listeCache.some((s) => s.id === e.choix.id);
+    const deja = trouve && cacheDe(mediaImport).some((s) => s.id === e.choix.id);
 
     titre.textContent = trouve ? e.choix.title : e.titre;
     source.className  = "import-source" + (deja ? " import-deja" : "");
@@ -2584,10 +2932,13 @@ function bilanImport() {
   const douteuses   = importEntrees.filter((e) => e.choix && e.sur === 0).length;
   const introuvable = importEntrees.length - trouvees;
 
-  const bouts = [`${cochees} série${cochees > 1 ? "s" : ""} cochée${cochees > 1 ? "s" : ""} sur ${importEntrees.length} lignes lues`];
-  if (introuvable) bouts.push(`${introuvable} créée${introuvable > 1 ? "s" : ""} à la main, sans jaquette`);
-  if (importEchecs) bouts.push(`${importEchecs} non vérifiée${importEchecs > 1 ? "s" : ""} faute de réseau`);
-  if (douteuses)   bouts.push(`${douteuses} incertaine${douteuses > 1 ? "s" : ""}, décochée${douteuses > 1 ? "s" : ""} par précaution`);
+  // Accords : « 3 séries cochées », « 3 films cochés ».
+  const f = mediaImport === "film";
+  const acc = (n, mot) => `${mot}${f ? "" : "e"}${n > 1 ? "s" : ""}`;
+  const bouts = [`${pluriel(cochees, f ? "film" : "série")} ${acc(cochees, "coché")} sur ${importEntrees.length} lignes lues`];
+  if (introuvable) bouts.push(`${introuvable} ${acc(introuvable, "créé")} à la main, sans jaquette`);
+  if (importEchecs) bouts.push(`${importEchecs} non ${acc(importEchecs, "vérifié")} faute de réseau`);
+  if (douteuses)   bouts.push(`${douteuses} ${f ? (douteuses > 1 ? "incertains" : "incertain") : acc(douteuses, "incertain")}, ${acc(douteuses, "décoché")} par précaution`);
 
   $("import-bilan").textContent =
     `${bouts.join(" · ")}. Vérifie, corrige ce qui doit l'être, puis valide.`;
@@ -2607,7 +2958,11 @@ $("import-tout").addEventListener("click", () => {
 $("import-valider").addEventListener("click", async () => {
   if (!currentUser) return ouvrirConnexion("Crée un compte pour importer ta liste.");
 
-  const statut = $("import-statut").value;
+  const media = mediaImport;
+  const film = media === "film";
+  const cache = cacheDe(media);
+  // Un film n'est jamais « en cours » : il est vu ou à voir.
+  const statut = film && $("import-statut").value === "en_cours" ? "a_voir" : $("import-statut").value;
   const uid = currentUser.uid;
 
   /* Une même série peut apparaître deux fois dans le texte collé, ou deux
@@ -2617,7 +2972,7 @@ $("import-valider").addEventListener("click", async () => {
      main n'en a pas, on la rapproche donc par son titre normalisé — c'est le
      seul point commun entre deux imports du même fichier. */
   const localesExistantes = new Map(
-    listeCache.filter((s) => estLocale(s.id)).map((s) => [cleTitre(s.title), s.id])
+    cache.filter((s) => estLocale(s.id)).map((s) => [cleTitre(s.title), s.id])
   );
 
   const vus = new Set();
@@ -2649,14 +3004,14 @@ $("import-valider").addEventListener("click", async () => {
      fiche qui ne répond pas n'empêche rien : la série entre quand même, ses
      saisons arriveront à la prochaine visite. */
   const aCompleter = retenues
-    .filter((e) => e.choix && !listeCache.some((s) => s.id === e.choix.id));
+    .filter((e) => e.choix && !cache.some((s) => s.id === e.choix.id));
   const fiches = new Map();
   let faites = 0;
 
   await enParallele(aCompleter, 4, async (e) => {
-    try { fiches.set(e.choix.id, await parIdentifiant(e.choix.id)); } catch {}
+    try { fiches.set(e.choix.id, await parIdentifiant(media, e.choix.id)); } catch {}
     faites++;
-    $("import-valider").textContent = `Saisons… ${faites} / ${aCompleter.length}`;
+    $("import-valider").textContent = `${film ? "Fiches" : "Saisons"}… ${faites} / ${aCompleter.length}`;
   });
   $("import-valider").textContent = "Enregistrement…";
 
@@ -2674,16 +3029,25 @@ $("import-valider").addEventListener("click", async () => {
       title: e.titre, cover: "", episodes: 0
     };
     if (!e.choix) localesExistantes.set(cleLocale, m.id);
-    const dejaSuivie = listeCache.find((s) => s.id === m.id);
+    const dejaSuivie = cache.find((s) => s.id === m.id);
     const fiche = fiches.get(m.id);
-    const diffusion = fiche ? champsDiffusion(fiche) : {};
+    const diffusion = fiche && !film ? champsDiffusion(fiche) : {};
     const episodes = Math.min(Math.max(diffusion.episodes ?? m.episodes ?? 0, 0), 10000);
 
     /* « Déjà vue » sur une série encore en diffusion veut dire « à jour » :
        elle reste en cours, pour que les prochains épisodes s'affichent. */
     const statutFinal = statut === "termine" && fiche && !diffusion.finie ? "en_cours" : statut;
 
-    const data = {
+    const data = film ? {
+      id: m.id,
+      title: (fiche?.title || m.title).slice(0, 300),
+      cover: (fiche?.cover || m.cover || "").slice(0, 500),
+      statut: statut === "termine" ? "termine" : "a_voir",
+      addedAt: instant + rangEntree,
+      genres: (fiche?.genres || m.genres || []).slice(0, 12),
+      duree: Math.min(fiche?.duree || 0, 2000),
+      annee: (fiche?.annee || m.annee || "").slice(0, 4)
+    } : {
       id: m.id,
       title: (fiche?.title || m.title).slice(0, 300),
       cover: (fiche?.cover || m.cover || "").slice(0, 500),
@@ -2711,14 +3075,14 @@ $("import-valider").addEventListener("click", async () => {
 
       if (!Object.keys(retouche).length) return;
       operations.push({
-        ref: refSerie(uid, m.id),
+        ref: refElement(uid, media, m.id),
         data: retouche,
         fusion: true
       });
       return;
     }
 
-    operations.push({ ref: refSerie(uid, m.id), data });
+    operations.push({ ref: refElement(uid, media, m.id), data });
   });
 
   try {
@@ -2730,9 +3094,12 @@ $("import-valider").addEventListener("click", async () => {
 
     $("import-screen").hidden = true;
     $("import-texte").value = "";
+    const n = retenues.length;
+    const quoi = film ? pluriel(n, "film") : pluriel(n, "série");
+    const e = film ? "" : "e";
     toast(reordonner
-      ? `${retenues.length} série${retenues.length > 1 ? "s" : ""} enregistrée${retenues.length > 1 ? "s" : ""}, ta liste suit l'ordre du fichier.`
-      : `${retenues.length} série${retenues.length > 1 ? "s" : ""} ajoutée${retenues.length > 1 ? "s" : ""} à ta liste.`);
+      ? `${quoi} enregistré${e}${n > 1 ? "s" : ""}, ta liste suit l'ordre du fichier.`
+      : `${quoi} ajouté${e}${n > 1 ? "s" : ""} à ta liste.`);
   } catch (err) {
     console.error("Import :", err.code, err.message);
     toast("L'enregistrement a échoué. Réessaie dans un instant.");
@@ -2750,8 +3117,8 @@ function ouvrirFiche(a) {
   $("ep-saisie").hidden = true;
   majFiche();
   showView("fiche");
-  // Tableau de bord : les séries les plus consultées (voir suivi.js)
-  if (a && a.id) window.suivi?.contenu("serie", a.id, a.title);
+  // Tableau de bord : les séries et films les plus consultés (voir suivi.js)
+  if (a && a.id) window.suivi?.contenu(a.media === "film" ? "film" : "serie", a.id, a.title);
 }
 
 /* Les années de diffusion disent beaucoup : « 2011–2019 » annonce une série
@@ -2781,10 +3148,66 @@ function texteDiffusion(a, suivi) {
   return "";
 }
 
+/* Ce que les deux fiches ont en commun : image, titre, genres, résumé,
+   plateformes, note, boutons d'ajout et de retrait. */
+function majFicheCommune(a, suivi) {
+  $("fiche-cover").hidden = !a.cover;
+  $("fiche-cover-vide").hidden = !!a.cover;
+  if (a.cover) $("fiche-cover").src = a.cover;
+  else $("fiche-cover-vide").textContent = initiales(a.title);
+  $("fiche-titre").textContent = a.title;
+
+  $("fiche-genres").innerHTML = (a.genres || [])
+    .map((g) => `<span class="etiquette">${escapeHtml(g)}</span>`).join("");
+
+  if (a.complet || a.locale || a.resume) $("fiche-resume").textContent = a.resume || "";
+
+  afficherPlateformes(a.liens);
+  afficherNotePerso(suivi);
+  $("fiche-modifier").hidden = !suivi;
+  $("fiche-danger").hidden  = !suivi;
+}
+
+function majFicheFilm(a) {
+  const suivi = suiviDe(a);
+  majFicheCommune(a, suivi);
+
+  $("fiche-sous").textContent = (a.locale ? ["Film ajouté par toi"] : [
+    "Film", a.annee, duree(a.duree || suivi?.duree)
+  ]).filter(Boolean).join(" · ");
+
+  const credits = [];
+  if (a.realisateurs?.length) credits.push(`Réalisé par ${a.realisateurs.slice(0, 3).join(", ").replace(/, ([^,]*)$/, " et $1")}`);
+  if (a.original && cleTitre(a.original) !== cleTitre(a.title)) credits.push(`Titre original : ${a.original}`);
+  $("fiche-credits").textContent = credits.join(" · ");
+  $("fiche-credits").hidden = !credits.length;
+
+  const sortie = a.debut && a.debut > aujourdhui() ? `Sortie ${quand(a.debut)}` :
+    (a.debut && !a.locale ? `Sorti le ${dateLongue(a.debut)}` : "");
+  $("fiche-diffusion").textContent = sortie;
+  $("fiche-diffusion").hidden = !sortie;
+
+  $("fiche-saisons-bloc").hidden = true;
+  $("fiche-suivi").hidden = true;
+  $("fiche-film-suivi").hidden = !suivi;
+  $("fiche-ajouter").hidden = !!suivi;
+  $("fiche-ajouter-vu").hidden = !!suivi || !currentUser;
+  $("fiche-ajouter").textContent = currentUser ? "Ajouter à voir" : "Créer un compte pour suivre ce film";
+
+  if (suivi) {
+    document.querySelectorAll(".statut-film").forEach((b) =>
+      b.classList.toggle("is-active", b.dataset.statut === suivi.statut));
+    $("film-etat").textContent = estTermine(suivi) ? "Tu as vu ce film." : "Dans ta liste, à voir.";
+  }
+}
+
 function majFiche() {
   const a = ficheCourante;
   if (!a) return;
-  const suivi = listeCache.find((s) => s.id === a.id);
+  if (a.media === "film") return majFicheFilm(a);
+  const suivi = suiviDe(a);
+  $("fiche-film-suivi").hidden = true;
+  $("fiche-ajouter-vu").hidden = true;
 
   $("fiche-cover").hidden = !a.cover;
   $("fiche-cover-vide").hidden = !!a.cover;
@@ -2863,7 +3286,7 @@ function majFiche() {
       : "J'ai vu l'épisode suivant";
   }
 
-  document.querySelectorAll(".statut").forEach((b) =>
+  document.querySelectorAll("#fiche-suivi .statut").forEach((b) =>
     b.classList.toggle("is-active", b.dataset.statut === suivi.statut));
 }
 
@@ -2926,7 +3349,7 @@ function afficherSaisons(a, suivi) {
         b.title = `Marquer vus tous les épisodes jusqu'à la fin de la saison ${i + 1}`;
         const fin = avant + diffuses;
         b.addEventListener("click", () => {
-          const frais = listeCache.find((x) => x.id === suivi.id);
+          const frais = suiviDe(suivi);
           if (frais) fixerVus(frais, Math.max(frais.vus, fin));
         });
         ligne.appendChild(b);
@@ -2936,9 +3359,49 @@ function afficherSaisons(a, suivi) {
   }
 }
 
+/* Un film s'ajoute « à voir », ou directement « vu ». */
+async function ajouterFilm(vu) {
+  let a = ficheCourante;
+  if (!a) return;
+  if (!currentUser) return ouvrirConnexion("Crée un compte pour suivre ce film.");
+
+  $("fiche-ajouter").disabled = $("fiche-ajouter-vu").disabled = true;
+  try {
+    if (!a.complet && !a.locale) {
+      try { a = await parIdentifiant("film", a.id); } catch {}
+    }
+    await setDoc(refElement(currentUser.uid, "film", a.id), {
+      id: a.id, title: a.title.slice(0, 300), cover: a.cover || "",
+      statut: vu ? "termine" : "a_voir",
+      addedAt: Date.now(),
+      ...champsFilm(a)
+    });
+    toast(vu ? `${a.title} est dans tes films vus.` : `${a.title} est dans tes films à voir.`);
+    window.suivi?.contenu("ajout", "film-" + a.id, a.title);
+    window.suivi?.action("ajout-liste");
+  } catch (err) {
+    console.error("Ajout du film :", err.code, err.message);
+    toast("L'ajout a échoué.");
+  } finally {
+    $("fiche-ajouter").disabled = $("fiche-ajouter-vu").disabled = false;
+  }
+}
+
+$("fiche-ajouter-vu").addEventListener("click", () => ajouterFilm(true));
+
+document.querySelectorAll(".statut-film").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    const s = suiviDe(ficheCourante);
+    if (!s || s.statut === btn.dataset.statut) return;
+    try { await updateDoc(refElement(currentUser.uid, "film", s.id), { statut: btn.dataset.statut }); }
+    catch (err) { console.error("Statut du film :", err.code, err.message); toast("Le changement n'a pas pu être enregistré."); }
+  });
+});
+
 $("fiche-ajouter").addEventListener("click", async () => {
   let a = ficheCourante;
   if (!a) return;
+  if (a.media === "film") return ajouterFilm(false);
   if (!currentUser) return ouvrirConnexion("Crée un compte pour suivre cette série.");
 
   $("fiche-ajouter").disabled = true;
@@ -2947,7 +3410,7 @@ $("fiche-ajouter").addEventListener("click", async () => {
     // fiche complète pour enregistrer une série qu'on pourra suivre épisode
     // par épisode.
     if (!a.complet && !a.locale) {
-      try { a = await parIdentifiant(a.id); } catch {}
+      try { a = await parIdentifiant("serie", a.id); } catch {}
     }
     const rien = !a.episodes && (a.diffusion === "a_venir" || !a.complet);
 
@@ -3011,19 +3474,19 @@ async function fixerVus(s, vus) {
 }
 
 $("ep-plus").addEventListener("click", () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (s) fixerVus(s, s.vus + 1);
 });
 
 $("ep-moins").addEventListener("click", () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (s && s.vus > 0) fixerVus(s, s.vus - 1);
 });
 
 /* Choisir directement « saison 4, épisode 6 » évite quarante clics à qui
    reprend une série en cours de route. */
 $("ep-choisir").addEventListener("click", () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (!s) return;
 
   const panneau = $("ep-saisie");
@@ -3059,7 +3522,7 @@ $("ep-choisir").addEventListener("click", () => {
 });
 
 $("ep-saison").addEventListener("change", () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   const n = Number($("ep-saison").value);
   const max = s?.saisons?.[n - 1] || 0;
   $("ep-numero").max = max;
@@ -3067,7 +3530,7 @@ $("ep-saison").addEventListener("change", () => {
 });
 
 async function validerSaisie() {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (!s) return;
 
   const e = Number($("ep-numero").value);
@@ -3087,9 +3550,9 @@ $("ep-numero").addEventListener("keydown", (ev) => {
   if (ev.key === "Enter") { ev.preventDefault(); validerSaisie(); }
 });
 
-document.querySelectorAll(".statut").forEach((btn) => {
+document.querySelectorAll("#fiche-suivi .statut").forEach((btn) => {
   btn.addEventListener("click", async () => {
-    const s = listeCache.find((x) => x.id === ficheCourante?.id);
+    const s = suiviDe(ficheCourante);
     if (!s) return;
     const statut = btn.dataset.statut;
     // « Terminé » sur une série finie coche aussi tous ses épisodes.
@@ -3100,11 +3563,11 @@ document.querySelectorAll(".statut").forEach((btn) => {
 });
 
 $("fiche-retirer").addEventListener("click", async () => {
-  const s = listeCache.find((x) => x.id === ficheCourante?.id);
+  const s = suiviDe(ficheCourante);
   if (!s) return;
   if (!confirm(`Retirer « ${s.title} » de ta liste ?`)) return;
-  await deleteDoc(refSerie(currentUser.uid, s.id));
-  toast("Retirée de ta liste.");
+  await deleteDoc(refElement(currentUser.uid, s.media, s.id));
+  toast("Retiré de ta liste.");
   showView("liste");
 });
 
@@ -3202,7 +3665,7 @@ function afficherNotePerso(suivi) {
     b.setAttribute("aria-pressed", String(suivi.note === i));
     // Recliquer sur sa propre note l'efface : c'est le seul moyen de revenir
     // à « pas notée » sans inventer un bouton de plus.
-    b.addEventListener("click", () => noter(suivi.id, suivi.note === i ? null : i, sur));
+    b.addEventListener("click", () => noter(suivi, suivi.note === i ? null : i, sur));
     zone.appendChild(b);
   }
 
@@ -3214,11 +3677,11 @@ function afficherNotePerso(suivi) {
   zone.appendChild(info);
 }
 
-async function noter(id, valeur, sur) {
+async function noter(s, valeur, sur) {
   if (!currentUser) return;
   echellePreferee = sur;
   try {
-    await majSuivi(id, valeur === null
+    await updateDoc(refElement(currentUser.uid, s.media, s.id), valeur === null
       ? { note: deleteField(), sur: deleteField() }
       : { note: valeur, sur });
   } catch (err) {
@@ -3231,12 +3694,12 @@ async function noter(id, valeur, sur) {
    conversion perd de la finesse dans ce sens, jamais dans l'autre. */
 document.querySelectorAll(".echelle").forEach((btn) => {
   btn.addEventListener("click", async () => {
-    const s = listeCache.find((x) => x.id === ficheCourante?.id);
+    const s = suiviDe(ficheCourante);
     if (!s) return;
     const sur = Number(btn.dataset.sur);
     echellePreferee = sur;
     if (!s.note) { afficherNotePerso({ ...s, sur }); return; }
-    await majSuivi(s.id, { note: convertirNote(s.note, s.sur || 10, sur), sur });
+    await updateDoc(refElement(currentUser.uid, s.media, s.id), { note: convertirNote(s.note, s.sur || 10, sur), sur });
   });
 });
 

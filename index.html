@@ -102,7 +102,7 @@
       <!-- ── Étape 1 : la personne colle son texte ── -->
       <div id="import-saisie">
         <p class="auth-intro">
-          Colle ta liste ici, une série par ligne. Les notes sont reconnues sous
+          Colle ta liste ici, un titre par ligne. Les notes sont reconnues sous
           toutes leurs formes — « Dark 9 », « Dark 18/20 », « Dark : 4/5 » — et
           tes commentaires entre parenthèses sont ignorés, où qu'ils se trouvent
           sur la ligne.
@@ -114,6 +114,13 @@
 
         <div class="import-options">
           <div class="field">
+            <label for="import-type">Ta liste contient</label>
+            <select id="import-type">
+              <option value="serie">Des séries</option>
+              <option value="film">Des films</option>
+            </select>
+          </div>
+          <div class="field">
             <label for="import-echelle">Tes notes sont sur</label>
             <select id="import-echelle">
               <option value="10">10</option>
@@ -122,7 +129,7 @@
             </select>
           </div>
           <div class="field">
-            <label for="import-statut">Ces séries sont</label>
+            <label for="import-statut" id="import-statut-libelle">Ces séries sont</label>
             <select id="import-statut">
               <option value="termine">Déjà vues en entier</option>
               <option value="en_cours">En cours</option>
@@ -191,12 +198,20 @@
         </div>
 
         <div class="serie-champs">
+          <div class="field" id="serie-champ-type">
+            <label for="serie-type">C'est</label>
+            <select id="serie-type">
+              <option value="serie">Une série</option>
+              <option value="film">Un film</option>
+            </select>
+          </div>
+
           <div class="field">
             <label for="serie-nom">Titre</label>
             <input type="text" id="serie-nom" maxlength="300" autocomplete="off">
           </div>
 
-          <div class="serie-duo">
+          <div class="serie-duo" id="serie-episodes-duo">
             <div class="field">
               <label for="serie-episodes">Épisodes au total</label>
               <input type="number" id="serie-episodes" min="0" max="5000" placeholder="0 si inconnu">
@@ -257,7 +272,7 @@
 
         <dl class="apercu-infos">
           <div><dt>Statut</dt><dd id="apercu-statut"></dd></div>
-          <div><dt>Épisodes</dt><dd id="apercu-episodes"></dd></div>
+          <div id="apercu-ligne-episodes"><dt>Épisodes</dt><dd id="apercu-episodes"></dd></div>
           <div><dt>Sa note</dt><dd id="apercu-note"></dd></div>
         </dl>
       </div>
@@ -394,12 +409,23 @@
           </p>
           <div id="avenir-liste" class="grille"></div>
         </div>
+
+        <div class="bloc-avenir">
+          <h2 class="section-title">Bientôt au cinéma</h2>
+          <p class="section-note">Les films qui sortent prochainement en France, classés par popularité.</p>
+          <div id="films-avenir-liste" class="grille"></div>
+        </div>
       </section>
 
       <!-- ── Découvrir ── -->
       <section id="view-decouvrir" hidden>
+        <div class="segments" role="group" aria-label="Séries ou films">
+          <button type="button" class="segment type-decouvrir is-active" data-media="serie" aria-pressed="true">Séries</button>
+          <button type="button" class="segment type-decouvrir" data-media="film" aria-pressed="false">Films</button>
+        </div>
+
         <form id="search-form" class="search-form" role="search">
-          <label for="search-input" class="visually-hidden">Chercher une série</label>
+          <label for="search-input" class="visually-hidden" id="search-label">Chercher une série</label>
           <input type="search" id="search-input" placeholder="Chercher une série…" autocomplete="off">
         </form>
         <div id="search-results" class="search-results" hidden></div>
@@ -420,8 +446,8 @@
           <h2 class="section-title">Garde une trace de ce que tu regardes</h2>
           <p class="section-note">
             Avec un compte, tu peux suivre où tu en es saison par saison, voir
-            arriver les nouveaux épisodes, noter les séries et retrouver ta liste
-            sur tous tes appareils. C'est gratuit
+            arriver les nouveaux épisodes, garder tes films vus et à voir, tout
+            noter et retrouver tes listes sur tous tes appareils. C'est gratuit
             et ça prend dix secondes.
           </p>
           <div class="invite-boutons">
@@ -431,16 +457,18 @@
         </div>
 
         <div id="liste-contenu">
+        <div class="segments" role="group" aria-label="Quelle liste afficher">
+          <button type="button" class="segment type-liste is-active" data-vue-liste="serie" aria-pressed="true">Séries</button>
+          <button type="button" class="segment type-liste" data-vue-liste="film" aria-pressed="false">Films</button>
+          <button type="button" class="segment type-liste" data-vue-liste="tout" aria-pressed="false">Tout</button>
+        </div>
+
         <div class="liste-outils">
           <button type="button" id="ouvrir-serie" class="btn-ghost">Ajouter une série</button>
           <button type="button" id="ouvrir-import" class="btn-ghost">Importer une liste</button>
         </div>
 
-        <div id="stats" class="stats" hidden>
-          <p><strong id="stat-suivis">0</strong> séries suivies</p>
-          <p><strong id="stat-episodes">0</strong> épisodes vus</p>
-          <p><strong id="stat-termines">0</strong> terminées</p>
-        </div>
+        <div id="stats" class="stats" hidden></div>
 
         <form class="search-form search-liste" role="search" onsubmit="return false">
           <label for="liste-recherche" class="visually-hidden">Chercher dans ma liste</label>
@@ -529,6 +557,12 @@
           </div>
         </div>
 
+        <div class="segments" role="group" aria-label="Quelle liste afficher">
+          <button type="button" class="segment type-profil is-active" data-vue-profil="serie" aria-pressed="true">Séries</button>
+          <button type="button" class="segment type-profil" data-vue-profil="film" aria-pressed="false">Films</button>
+          <button type="button" class="segment type-profil" data-vue-profil="tout" aria-pressed="false">Tout</button>
+        </div>
+
         <div class="barre-filtres">
           <div class="filtres" role="group" aria-label="Filtrer">
             <button type="button" class="filtre-profil is-active" data-statut="tous">Tous</button>
@@ -594,7 +628,18 @@
               </div>
             </div>
 
-            <button type="button" id="fiche-ajouter" class="btn-primary" hidden>Ajouter à ma liste</button>
+            <div id="fiche-film-suivi" hidden>
+              <p class="fiche-progression" id="film-etat"></p>
+              <div class="statuts" role="group" aria-label="Statut du film">
+                <button type="button" class="statut statut-film" data-statut="a_voir">À voir</button>
+                <button type="button" class="statut statut-film" data-statut="termine">Vu</button>
+              </div>
+            </div>
+
+            <div class="fiche-ajouts">
+              <button type="button" id="fiche-ajouter" class="btn-primary" hidden>Ajouter à ma liste</button>
+              <button type="button" id="fiche-ajouter-vu" class="btn-ghost" hidden>Je l'ai déjà vu</button>
+            </div>
           </div>
         </div>
 
@@ -629,7 +674,7 @@
       </section>
 
       <footer class="credits-tmdb">
-        <p>Données des séries : <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>.
+        <p>Données des séries et des films : <a href="https://www.themoviedb.org/" target="_blank" rel="noopener">TMDB</a>.
            Ce site utilise l'API de TMDB, sans être approuvé ni certifié par TMDB.
            Disponibilités des plateformes : JustWatch.</p>
       </footer>

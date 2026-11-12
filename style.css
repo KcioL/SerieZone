@@ -1334,3 +1334,25 @@ button, input { font: inherit; color: inherit; }
 @media (max-width: 560px) {
   #ouvrir-login, #ouvrir-connexion { padding: 7px 12px; font-size: 0.82rem; }
 }
+
+/* ══════════════════ Séries / Films / Tout ══════════════════ */
+
+.segments {
+  display: inline-flex; gap: 4px; padding: 4px; margin: 0 0 22px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
+}
+.segment {
+  background: none; border: none; border-radius: 999px;
+  padding: 8px 20px; color: var(--muted); font: inherit; font-size: 0.92rem; font-weight: 500;
+  cursor: pointer; transition: background 0.15s, color 0.15s;
+}
+.segment:hover { color: var(--text); }
+.segment.is-active { background: var(--accent); color: var(--bg); }
+@media (max-width: 560px) {
+  .segments { display: flex; }
+  .segment { flex: 1; padding: 8px 10px; }
+}
+
+.fiche-ajouts { display: flex; flex-wrap: wrap; gap: 10px; }
+.fiche-ajouts .btn-ghost { padding: 11px 22px; font-size: inherit; color: var(--text); }
+#fiche-film-suivi { margin-bottom: 8px; }

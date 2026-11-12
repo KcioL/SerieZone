@@ -4,7 +4,7 @@
    s'applique immédiatement. Les images et les bibliothèques versionnées
    restent en cache. */
 
-const VERSION = "seriezone-v5";
+const VERSION = "seriezone-v4";
 
 const COQUE = [
   "./", "./index.html", "./style.css", "./app.js",
